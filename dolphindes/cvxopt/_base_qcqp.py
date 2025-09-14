@@ -205,20 +205,20 @@ class _SharedProjQCQP(ABC):
         return self.Pdiags.shape[1] + len(self.B_j)
 
     def _add_projectors(self, lags: FloatNDArray) -> ComplexArray:
-        """Form the diagonal of sum_j lags[j] P_j.
+        """Form the diagonal of sum_j λ_j P_j using ONLY projector multipliers.
 
         Parameters
         ----------
         lags : FloatNDArray
-            Lagrange multipliers corresponding to projector constraints
-            (only the first P columns; general constraint multipliers are ignored).
+            Full Lagrange multiplier vector (projector first, then general).
+            Only the first P = Pdiags.shape[1] entries are used here.
 
         Returns
         -------
         ComplexArray
-            Combined projector diagonal entries.
+            Combined projector diagonal entries Σ_j λ_j P_j (as a vector).
         """
-        return cast(ComplexArray, self.Pdiags @ lags)
+        return cast(ComplexArray, self.Pdiags @ lags[:self.Pdiags.shape[1]])
 
     def _get_total_A(self, lags: FloatNDArray) -> sp.csc_array | ComplexArray:
         """Return A(lags) = A0 + Σ_j lags[j] * Sym(A1 P_j A2) (+ general parts).
@@ -518,12 +518,10 @@ class _SharedProjQCQP(ABC):
                 gen_constr_grad = np.zeros(self.n_gen_constr)
                 for i in range(self.n_gen_constr):
                     gen_constr_grad[i] = np.real(
-                        -xstar.conj().T
-                        @ self.A2.conj().T
-                        @ self.B_j[i]
-                        @ self.A2
-                        @ xstar
+                        -xstar.conj().T @ self.A2.conj().T @ self.B_j[i] @ 
+                        self.A2 @ xstar
                         + 2 * xstar.conj().T @ self.A2.conj().T @ self.s_2j[i]
+                        + self.c_2j[i]
                     )
                 grad = np.concatenate((grad, gen_constr_grad))
 
@@ -560,7 +558,10 @@ class _SharedProjQCQP(ABC):
 
             elif get_grad:
                 grad = cast(FloatNDArray, grad)
-                grad_penalty = np.zeros(grad.shape[0])
+                P = self.Pdiags.shape[1]
+                G = self.n_gen_constr
+
+                proj_grad_penalty = np.zeros(P)
                 for j in range(penalty_matrix.shape[1]):
                     # slow: for i in range(len(grad)): grad_penalty[i] +=
                     # -np.real(A_inv_penalty[:, j].conj().T @ self.A1 @
@@ -572,14 +573,14 @@ class _SharedProjQCQP(ABC):
 
                     # Same as above (fastest)
                     A_inv_penalty_j_A1 = A_inv_penalty[:, j].conj().T @ self.A1
-                    A2_A_inv_penalty_j = self.A2 @ A_inv_penalty[:, j]  # Shape: (N_p,)
-                    grad_penalty += -np.real(
+                    A2_A_inv_penalty_j = self.A2 @ A_inv_penalty[:, j]  # (N_p,)
+                    proj_grad_penalty += -np.real(
                         (A_inv_penalty_j_A1 * A2_A_inv_penalty_j) @ self.Pdiags
                     )
 
-                if self.n_gen_constr > 0:
-                    gen_constr_grad_penalty = np.zeros(self.n_gen_constr)
-                    for i in range(self.n_gen_constr):
+                if G > 0:
+                    gen_constr_grad_penalty = np.zeros(G)
+                    for i in range(G):
                         for j in range(penalty_matrix.shape[1]):
                             gen_constr_grad_penalty[i] += np.real(
                                 -A_inv_penalty[:, j].conj().T
@@ -588,9 +589,11 @@ class _SharedProjQCQP(ABC):
                                 @ self.A2
                                 @ A_inv_penalty[:, j]
                             )
-                    grad_penalty = np.concatenate(
-                        (grad_penalty, gen_constr_grad_penalty)
-                    )
+                    grad_penalty = np.zeros(P + G)
+                    grad_penalty[:P] = proj_grad_penalty
+                    grad_penalty[P:] = gen_constr_grad_penalty
+                else:
+                    grad_penalty = proj_grad_penalty
 
         DualAux = namedtuple(
             "DualAux",
