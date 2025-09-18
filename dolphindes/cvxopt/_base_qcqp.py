@@ -9,7 +9,7 @@ from numpy.typing import ArrayLike
 
 from dolphindes.cvxopt import gcd
 from dolphindes.types import ComplexArray, FloatNDArray
-from dolphindes.util import Sym
+from dolphindes.util import Projectors, Sym
 
 from .optimization import BFGS, Alt_Newton_GD, _Optimizer
 
@@ -148,6 +148,8 @@ class _SharedProjQCQP(ABC):
             self.c_2j = np.asarray(c_2j, dtype=float)
 
         self.Pdiags = np.asarray(Pdiags, dtype=complex)
+        # self.Proj = Projectors(Pdiags)
+    
         self.n_gen_constr = len(self.B_j)     
 
         assert len(self.c_2j) == len(self.s_2j), (
@@ -237,11 +239,9 @@ class _SharedProjQCQP(ABC):
 
     def _get_total_A_noprecomp(self, lags: FloatNDArray) -> sp.csc_array | ComplexArray:
         """Return total A without precomputation (better for many constraints)."""
-        # TODO(alessio): P_diag is usually already computed before calling
-        # get_total_A. Keeping it like this to not have to change the passed
-        # arguments, but should fix it at some point.
-        P_diag = self._add_projectors(lags)
-        return self.A0 + Sym(self.A1 @ sp.diags_array(P_diag, format="csr") @ self.A2)
+        raise NotImplementedError(
+            "_get_total_A_noprecomp not implemented; use precomputation."
+        )
 
     def _get_total_S(self, Pdiag: ComplexArray, Blags: FloatNDArray) -> ComplexArray:
         """Return S(lags) = s0 + A2^† ((Σ_j λ_j P_j)^† s1) + Σ_general μ_j (A2^† s_2j).
