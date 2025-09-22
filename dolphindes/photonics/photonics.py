@@ -127,7 +127,6 @@ class Photonics_TM_FDFD(Photonics_FDFD):
             check_attributes(self, 'omega', 'chi', 'Nx', 'Ny', 'Npmlx', 'Npmly', 'des_mask', 'bloch_x', 'bloch_y', 'dl', 'sparseQCQP')
             self.setup_EM_solver()
             self.setup_EM_operators()
-            +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
         except AttributeError as e:
             warnings.warn("Photonics_TM_FDFD initialized with missing attributes (lazy initialization). We strongly recommend passing all arguments for expected behavior.")
 
@@ -318,8 +317,10 @@ class Photonics_TM_FDFD(Photonics_FDFD):
         self.get_ei(self.ji, update=True)
 
         if Pdiags=="global":
-            self.Pdiags = np.ones((self.Ndes,2), dtype=complex)
-            self.Pdiags[:,1] = -1j
+            # Build projectors as a list of matrices (new API)
+            # old behavior: two columns with [1, -1j] on the diagonal
+            I = sp.eye_array(self.Ndes, dtype=complex, format="csc")
+            self.Plist = [I, (-1j) * I]
         else:
             raise ValueError("Not a valid Pdiags specification / needs implementation")
         
@@ -332,7 +333,7 @@ class Photonics_TM_FDFD(Photonics_FDFD):
 
             self.QCQP = SparseSharedProjQCQP(self.A0, self.s0, self.c0, 
                                             A1_sparse, A2_sparse, self.ei[self.des_mask]/2, 
-                                            self.Pdiags, verbose=verbose
+                                            self.Plist, verbose=verbose
                                             )
         else:
             if self.G is None: 
@@ -342,7 +343,7 @@ class Photonics_TM_FDFD(Photonics_FDFD):
 
             self.QCQP = DenseSharedProjQCQP(self.A0, self.s0, self.c0,
                                             A1_dense, self.ei[self.des_mask]/2,
-                                            self.Pdiags, verbose=verbose
+                                            self.Plist, verbose=verbose
                                             ) # for dense QCQP formulation A2 is not needed 
 
     def bound_QCQP(self, method : str = 'bfgs', init_lags : np.ndarray = None, opt_params : dict = None):
