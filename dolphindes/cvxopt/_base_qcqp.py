@@ -201,6 +201,7 @@ class _SharedProjQCQP(ABC):
         # For diagonal P: allP_at_v(self.s1, dagger=True) == (Pdiags.conj().T * s1).T
         Pv = self.Proj.allP_at_v(self.s1, dagger=True)  # shape (n, k)
         self.Fs = self.A2.conj().T @ Pv  # shape (m, k)
+        
 
     def get_number_constraints(self) -> int:
         """Return total number of constraints (projector + general)."""
@@ -503,11 +504,9 @@ class _SharedProjQCQP(ABC):
             A2_xstar = self.A2 @ xstar                  # (n,)  aka y
             u = self.A1.conj().T @ xstar                # (n,)  aka A1^H x*
             Py = self.Proj.allP_at_v(A2_xstar)          # (n, k)  columns: P_j y
-            # (n, k) columns: P_j^† s1
-            Ps1_dag = self.Proj.allP_at_v(self.s1, dagger=True)
 
             term1 = -np.real(u.conj() @ Py)             # (k,)
-            term2 =  2 * np.real(A2_xstar.conj() @ Ps1_dag)  # (k,)
+            term2 =  2 * np.real(xstar.conj() @ self.Fs)  # (k,)
             grad = term1 + term2
 
             if self.n_gen_constr > 0:
