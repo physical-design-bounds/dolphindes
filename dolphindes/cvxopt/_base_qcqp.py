@@ -95,7 +95,8 @@ class _SharedProjQCQP(ABC):
         A1: ArrayLike | sp.csc_array,
         A2: ArrayLike | sp.csc_array,
         s1: ArrayLike,
-        Pdiags: ArrayLike,
+        # Pdiags: ArrayLike,
+        Plist: ArrayLike,
         B_j: list[ArrayLike | sp.csc_array] | None = None,
         s_2j: list[ArrayLike] | None = None,
         c_2j: ArrayLike | None = None,
@@ -147,9 +148,8 @@ class _SharedProjQCQP(ABC):
         else:
             self.c_2j = np.asarray(c_2j, dtype=float)
 
-        self.Pdiags = np.asarray(Pdiags, dtype=complex)
-        # self.Proj = Projectors(Pdiags)
-    
+        self.Proj = Projectors(Plist)    
+        self.n_proj_constr = len(np.asarray(Plist, dtype=object))
         self.n_gen_constr = len(self.B_j)     
 
         assert len(self.c_2j) == len(self.s_2j), (
@@ -185,42 +185,33 @@ class _SharedProjQCQP(ABC):
         operations when the number of constraints is moderate.
         """
         self.precomputed_As = []
-        for i in range(self.Pdiags.shape[1]):
-            Ak = Sym(
-                self.A1 @ sp.diags_array(self.Pdiags[:, i], format="csr") @ self.A2
-            )
+        for i in range(self.n_proj_constr):
+            Ak = Sym(self.A1 @ self.Proj[i] @ self.A2)
             self.precomputed_As.append(Ak)
         for i in range(len(self.B_j)):
             self.precomputed_As.append(Sym(self.A2.conj().T @ self.B_j[i] @ self.A2))
 
         if self.verbose > 0:
             print(
-                f"Precomputed {self.Pdiags.shape[1] + len(self.B_j)}"
+                f"Precomputed {self.n_proj_constr + self.n_gen_constr}"
                 " A matrices for the projectors."
             )
 
-        # (Fs)_k = A_2^dagger P_k^dagger s1
-        self.Fs = self.A2.conj().T @ (self.Pdiags.conj().T * self.s1).T
+        # (Fs)_k = A2^† P_k^† s1 for each k.
+        # For diagonal P: allP_at_v(self.s1, dagger=True) == (Pdiags.conj().T * s1).T
+        Pv = self.Proj.allP_at_v(self.s1, dagger=True)  # shape (n, k)
+        self.Fs = self.A2.conj().T @ Pv  # shape (m, k)
 
     def get_number_constraints(self) -> int:
         """Return total number of constraints (projector + general)."""
-        return self.Pdiags.shape[1] + len(self.B_j)
+        return self.n_proj_constr + self.n_gen_constr
 
     def _add_projectors(self, lags: FloatNDArray) -> ComplexArray:
-        """Form the diagonal of sum_j λ_j P_j using ONLY projector multipliers.
-
-        Parameters
-        ----------
-        lags : FloatNDArray
-            Full Lagrange multiplier vector (projector first, then general).
-            Only the first P = Pdiags.shape[1] entries are used here.
-
-        Returns
-        -------
-        ComplexArray
-            Combined projector diagonal entries Σ_j λ_j P_j (as a vector).
-        """
-        return cast(ComplexArray, self.Pdiags @ lags[:self.Pdiags.shape[1]])
+        """Form the diagonal of sum_j λ_j P_j (diagonal projectors only)."""
+        # Retained for compatibility where a diagonal vector is explicitly needed.
+        if hasattr(self.Proj, "Pdiags"):
+            return cast(ComplexArray, self.Proj.Pdiags @ lags[: self.n_proj_constr])
+        raise NotImplementedError("Combined diagonal only defined for diagonal proj.")
 
     def _get_total_A(self, lags: FloatNDArray) -> sp.csc_array | ComplexArray:
         """Return A(lags) = A0 + Σ_j lags[j] * Sym(A1 P_j A2) (+ general parts).
@@ -243,13 +234,15 @@ class _SharedProjQCQP(ABC):
             "_get_total_A_noprecomp not implemented; use precomputation."
         )
 
-    def _get_total_S(self, Pdiag: ComplexArray, Blags: FloatNDArray) -> ComplexArray:
-        """Return S(lags) = s0 + A2^† ((Σ_j λ_j P_j)^† s1) + Σ_general μ_j (A2^† s_2j).
+    def _get_total_S(
+        self, proj_lags: FloatNDArray, Blags: FloatNDArray
+    ) -> ComplexArray:
+        """Return S(lags) = s0 + A2^† (Σ_j λ_j P_j^† s1) + Σ_general μ_j (A2^† s_2j).
 
         Parameters
         ----------
-        Pdiag : ComplexArray
-            Diagonal of Σ_j λ_j P_j (projector part only).
+        proj_lags : FloatNDArray
+            Lagrange multipliers for projector constraints (length = n_proj_constr).
         Blags : FloatNDArray
             Lagrange multipliers for general constraints (may be empty).
 
@@ -258,8 +251,10 @@ class _SharedProjQCQP(ABC):
         ComplexArray
             The combined linear term S used in A x = S.
         """
-        S = cast(ComplexArray, self.s0 + self.A2.T.conj() @ (Pdiag.conj() * self.s1))
-        # Could be optimized further by precomputing A2^dagger s_2j
+        # Σ λ_j P_j^† s1
+        y = self.Proj.weighted_sum_on_vector(self.s1, proj_lags, dagger=True)
+        S = cast(ComplexArray, self.s0 + self.A2.conj().T @ y)
+        # Could be optimized by precomputing A2^dagger s_2j
         S += sum(
             Blags[i] * (self.A2.conj().T @ self.s_2j[i]) for i in range(len(self.B_j))
         )
@@ -343,7 +338,7 @@ class _SharedProjQCQP(ABC):
                 return self.current_lags
 
         # Start with small positive lags
-        init_lags = np.random.random(int(self.Pdiags.shape[1])) * 1e-6
+        init_lags = np.random.random(self.n_proj_constr) * 1e-6
         init_lags = np.append(init_lags, len(self.B_j) * [0.0])
         
         init_lags[1] = start
@@ -401,11 +396,9 @@ class _SharedProjQCQP(ABC):
             Value x*^† A x* (real scalar).
         """
         Blags = lags[-self.n_gen_constr:] if self.n_gen_constr > 0 else np.array([])
-        P_diag = self._add_projectors(lags)
         A = self._get_total_A(lags)
-        S = self._get_total_S(P_diag, Blags)
-        self._update_Acho(A)  # update the Cholesky factorization
-
+        S = self._get_total_S(lags[: self.n_proj_constr], Blags)
+        self._update_Acho(A)
         x_star: ComplexArray = self._Acho_solve(S)
         xAx: float = np.real(np.vdot(x_star, A @ x_star))
 
@@ -491,27 +484,30 @@ class _SharedProjQCQP(ABC):
                     "Hessian computation with general constraints not implemented."
                 )
 
-        elif get_grad: 
-            # This is grad_lambda (not grad_x); elif since get_hess computes grad
-            # First term: -Re(xstar.conj() @ self.A1 @ (self.Pdiags[:, i] *
-            # (self.A2 @ xstar))). Second term: 2*Re(xstar.conj() @
-            # self.A2.T.conj() @ (self.Pdiags[:, i].conj() * self.s1))
-            # self.Pdiags has shape (N_diag, N_projectors), A2_xstar has shape (N_diag,)
-            # We want to multiply each column of Pdiags elementwise with A2_xstar.
-            # However, we know that sum_i w_i A_ij v_i = sum_i (w_i * v_i) A_ij.
-            # LHS is expression right below, RHS is below so we avoid dense
-            # intermediate matrices.
-            A2_xstar = self.A2 @ xstar  # Shape: (N_p,)
-            # Shape: (N_p,) where N_p = self.A1.shape[1]
-            x_conj_A1 = (xstar.conj() @ self.A1)  
-            
-            # term1 = -np.real((xstar.conj() @ self.A1) @ (self.Pdiags *
-            # A2_xstar[:, np.newaxis]))  # Shape: (N_diag, N_projectors)
-            term1 = -np.real((x_conj_A1 * A2_xstar) @ self.Pdiags)
+        elif get_grad:
+            # Generic projector gradient (works for diagonal and general P)
+            # Let y := A2 @ x*, u := A1^H @ x*
+            # For diagonal projectors only (legacy), we had:
+            #   term1_diag = -Re((x*^H A1) @ (Pdiags * y[:, None]))
+            #              = -Re(((x*^H A1) ⊙ y^T) @ Pdiags)
+            #              = -Re((x_conj_A1 * y) @ Pdiags)
+            #   term2_diag =  2 Re(y^H @ (Pdiags^* ⊙ s1))
+            #              =  2 Re((y^* ⊙ s1)^T @ Pdiags^*)
+            # New unified expressions using Projectors:
+            #   Py       = [P_1 y, ..., P_k y]            (n x k)
+            #   Ps1_dag  = [P_1^† s1, ..., P_k^† s1]      (n x k)
+            #   term1    = -Re(u^H Py)                    (k,)
+            #   term2    =  2 Re(y^H Ps1_dag)             (k,)
+            # For diagonal P, Py == Pdiags ⊙ y and Ps1_dag == Pdiags^* ⊙ s1, so the
+            # new expressions reduce exactly to the legacy vectorized formulas above.
+            A2_xstar = self.A2 @ xstar                  # (n,)  aka y
+            u = self.A1.conj().T @ xstar                # (n,)  aka A1^H x*
+            Py = self.Proj.allP_at_v(A2_xstar)          # (n, k)  columns: P_j y
+            # (n, k) columns: P_j^† s1
+            Ps1_dag = self.Proj.allP_at_v(self.s1, dagger=True)
 
-            # term2 = 2 * np.real(A2_xstar.conj() @ (self.Pdiags.conj() *
-            # self.s1[:, np.newaxis])) #. Same as above.
-            term2 = 2 * np.real((A2_xstar.conj() * self.s1) @ self.Pdiags.conj())
+            term1 = -np.real(u.conj() @ Py)             # (k,)
+            term2 =  2 * np.real(A2_xstar.conj() @ Ps1_dag)  # (k,)
             grad = term1 + term2
 
             if self.n_gen_constr > 0:
@@ -558,25 +554,16 @@ class _SharedProjQCQP(ABC):
 
             elif get_grad:
                 grad = cast(FloatNDArray, grad)
-                P = self.Pdiags.shape[1]
+                P = self.n_proj_constr
                 G = self.n_gen_constr
 
                 proj_grad_penalty = np.zeros(P)
                 for j in range(penalty_matrix.shape[1]):
-                    # slow: for i in range(len(grad)): grad_penalty[i] +=
-                    # -np.real(A_inv_penalty[:, j].conj().T @ self.A1 @
-                    # (self.Pdiags[:, i] * (self.A2 @ A_inv_penalty[:, j])))
-                    # # for loop method
-                    # fast: grad_penalty += -np.real((A_inv_penalty[:, j].conj().T
-                    # @ self.A1) @ (self.Pdiags * (self.A2 @
-                    # A_inv_penalty[:, j])[:, np.newaxis]))
-
-                    # Same as above (fastest)
-                    A_inv_penalty_j_A1 = A_inv_penalty[:, j].conj().T @ self.A1
-                    A2_A_inv_penalty_j = self.A2 @ A_inv_penalty[:, j]  # (N_p,)
-                    proj_grad_penalty += -np.real(
-                        (A_inv_penalty_j_A1 * A2_A_inv_penalty_j) @ self.Pdiags
-                    )
+                    pj = A_inv_penalty[:, j]
+                    yj = self.A2 @ pj
+                    uj = self.A1.conj().T @ pj
+                    Pyj = self.Proj.allP_at_v(yj)  # (n, k)
+                    proj_grad_penalty += -np.real(uj.conj() @ Pyj)  # (k,)
 
                 if G > 0:
                     gen_constr_grad_penalty = np.zeros(G)

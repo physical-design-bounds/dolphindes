@@ -158,7 +158,7 @@ class SparseSharedProjQCQP(_SharedProjQCQP):
         sksparse.cholmod.Factor
             Analyzed (symbolic) factorization handle stored in self.Acho.
         """
-        random_lags = np.random.rand(self.Pdiags.shape[1])
+        random_lags = np.random.rand(self.n_proj_constr + self.n_gen_constr)
         # P = self._add_projectors(random_lags)
         A = self._get_total_A(random_lags)
         if self.verbose > 1:
@@ -237,6 +237,7 @@ class SparseSharedProjQCQP(_SharedProjQCQP):
         -------
         self.Pdiags, self.current_lags
         """
+        raise NotImplementedError("Refine projectors not implemented in new refactor.")
         assert (
             self.current_lags is not None
         ), "Cannot refine projectors until an existing problem is solved. Run solve_current_dual_problem first."
@@ -365,6 +366,7 @@ class SparseSharedProjQCQP(_SharedProjQCQP):
             Result of solve_current_dual_problem:
             (current_dual, current_lags, current_grad, current_hess, current_xstar)
         """
+        raise NotImplementedError("Iterative splitting not implemented in new refactor.")
         assert self.n_gen_constr == 0, "Cannot iteratively split projectors when general constraints are present."
         max_cstrt_num = min(max_cstrt_num, 2 * self.Pdiags.shape[0])
         # Check if we're already at termination condition
