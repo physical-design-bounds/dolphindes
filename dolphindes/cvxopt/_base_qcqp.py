@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from collections import namedtuple
-from typing import Any, Optional, Tuple, cast
+from typing import Any, Optional, Tuple, cast, Iterator
 
 import numpy as np
 import scipy.sparse as sp
@@ -776,3 +776,145 @@ class _SharedProjQCQP(ABC):
             gcd_iter_period=gcd_iter_period,
             gcd_tol=gcd_tol,
         )
+
+    def refine_projectors(self) -> Tuple[Any, np.ndarray]:
+        """
+        Refine projector constraints by splitting each projector into two sub-projectors.
+
+        Strategy (diagonal or not):
+          - Identify non-empty column support of P (columns with nnz > 0).
+          - If support size <= 1: keep P as is.
+          - Else, build two diagonal column masks S1, S2 that partition the support
+            roughly in half, and define P1 = P @ S1, P2 = P @ S2 so that P = P1 + P2.
+          - Duplicate the parent multiplier on both children so Σ λ P remains unchanged.
+        General constraints (B_j, s_2j, c_2j) are left unchanged.
+
+        Returns
+        -------
+        self.Proj, self.current_lags
+        """
+        if self.current_lags is None:
+            raise AssertionError(
+                "Cannot refine projectors until an existing problem is solved. "
+                "Run solve_current_dual_problem first."
+            )
+
+        # Preserve current dual for verification
+        old_dual = self.get_dual(self.current_lags, get_grad=False)[0]
+
+        # Extract old projectors and lags
+        old_proj_count = self.n_proj_constr
+        old_proj_lags = np.array(self.current_lags[:old_proj_count], float)
+        old_gen_lags = np.array(
+            self.current_lags[old_proj_count:], float
+        ) if self.n_gen_constr > 0 else np.array([], float)
+
+        new_Plist = []
+        new_proj_lags_list = []
+
+        for j in range(old_proj_count):
+            Pj = self.Proj[j]  # sp.csc_array
+            # Column support: columns with any nnz
+            col_nnz = np.diff(Pj.indptr)
+            support = np.where(col_nnz > 0)[0]
+            if support.size <= 1:
+                # Keep as-is
+                new_Plist.append(Pj)
+                new_proj_lags_list.append(old_proj_lags[j])
+                continue
+
+            # Split support into two halves
+            mid = support.size // 2
+            idx1, idx2 = support[:mid], support[mid:]
+
+            # Build diagonal masks S1, S2 (0-1 on selected columns)
+            n = Pj.shape[1]
+            mask1 = np.zeros(n, dtype=float); mask1[idx1] = 1.0
+            mask2 = np.zeros(n, dtype=float); mask2[idx2] = 1.0
+            S1 = sp.diags_array(mask1, format="csc")
+            S2 = sp.diags_array(mask2, format="csc")
+
+            # Column partition: P = P S1 + P S2 exactly
+            P1 = Pj @ S1
+            P2 = Pj @ S2
+
+            # Append children; duplicate parent's lag on both so contribution equals old
+            new_Plist.append(P1)
+            new_Plist.append(P2)
+            new_proj_lags_list.append(old_proj_lags[j])
+            new_proj_lags_list.append(old_proj_lags[j])
+
+        # Replace projectors and update counts
+        self.Proj = Projectors(new_Plist)
+        self.n_proj_constr = len(new_Plist)
+
+        # New lags: concatenated projector lags + unchanged general lags
+        new_lags = np.concatenate(
+            [np.array(new_proj_lags_list, float), old_gen_lags]
+        )
+        self.current_lags = new_lags
+
+        self.compute_precomputed_values()
+
+        # Verify the dual value remains the same (A and S unchanged)
+        new_dual = self.get_dual(self.current_lags, get_grad=False)[0]
+        if self.verbose >= 1:
+            print(f"previous dual: {old_dual}, new dual: {new_dual} (should match)")
+        assert np.isclose(new_dual, old_dual, rtol=1e-2, atol=1e-8), \
+            "Dual value should be unchanged after refinement."
+
+        # Keep cached values consistent
+        self.current_dual = new_dual
+        # current_grad/hess/xstar are now stale; recompute lazily when next requested
+
+        return self.Proj, self.current_lags
+
+    def iterative_splitting_step(
+        self, method: str = "bfgs", max_cstrt_num: int | float = np.inf
+    ) -> Iterator[
+        Tuple[float, np.ndarray, np.ndarray, Optional[np.ndarray], np.ndarray]
+    ]:
+        """
+        Generate successive solutions by refining projectors and solving the dual.
+
+        Stop when:
+        - each projector has at most one non-zero column (pixel level for diagonal), or
+        - the number of constraints reaches max_cstrt_num.
+
+        Yields
+        ------
+        tuple
+            (current_dual, current_lags, current_grad, current_hess, current_xstar)
+        """
+        def projector_column_support_sizes() -> np.ndarray:
+            sizes = []
+            for j in range(self.n_proj_constr):
+                Pj = self.Proj[j]
+                col_nnz = np.diff(Pj.indptr)
+                sizes.append(int(np.count_nonzero(col_nnz)))
+            return np.array(sizes, int)
+
+        # Early exit if already above cap or pixel-level
+        max_cstrt_num = int(min(max_cstrt_num, 2 * (self.A0.shape[0])))
+        if self.n_proj_constr >= max_cstrt_num:
+            if self.verbose > 0:
+                print("Projector count already at or above specified maximum.")
+            return
+
+        while True:
+            sizes = projector_column_support_sizes()
+            if self.n_proj_constr >= max_cstrt_num or np.all(sizes <= 1):
+                if self.verbose > 0:
+                    print("Reached maximum projectors or pixel-level constraints.")
+                break
+
+            if self.verbose > 0:
+                print(f"Splitting projectors: {self.n_proj_constr} → ", end="")
+            # Refine (updates self.Proj/self.current_lags and recomputes precomputations)
+            self.refine_projectors()
+            if self.verbose > 0:
+                print(f"{self.n_proj_constr}")
+
+            # Solve with the new refined projector set, warm-start with current_lags
+            result = self.solve_current_dual_problem(method, init_lags=self.current_lags)
+            yield result

@@ -54,8 +54,8 @@ class Projectors():
             self.Pdiags = np.column_stack([P.diagonal() for P in self.Plist])
         else:
             # Build vertical stacks for both P and P^† to avoid runtime transposes
-            self.PstackV = sp.vstack(self.Plist, format='csc')                  # shape: (n*k, n)
-            self.PstackV_dag = sp.vstack([P.conj().T for P in self.Plist], format='csc')  # (n*k, n)
+            self.PstackV = sp.vstack(self.Plist, format='csc')
+            self.PstackV_dag = sp.vstack([P.conj().T for P in self.Plist], format='csc')
         del self.Plist  # We do not need the original list
 
     def _getitem_diagonal(self, key: int) -> sp.csc_array:

@@ -1,30 +1,35 @@
 """
-Classes for calculating QCQP design bounds for photonics problems, 
-bridging the QCQP Dual Problem Interface in cvxopt 
+Classes for calculating QCQP design bounds for photonics problems.
+
+Bridges the QCQP Dual Problem Interface in cvxopt 
 and the Maxwell Solvers in maxwell
 """
 
 __all__ = []
 
+import warnings
+from typing import Tuple
+
 import numpy as np
 import scipy.sparse as sp
 import scipy.sparse.linalg as spla
-from dolphindes.cvxopt import SparseSharedProjQCQP, DenseSharedProjQCQP
+
+from dolphindes.cvxopt import DenseSharedProjQCQP, SparseSharedProjQCQP
 from dolphindes.maxwell import TM_FDFD
 from dolphindes.util import check_attributes
-from typing import Tuple 
-import warnings
+
 
 class Photonics_FDFD():
     """
-    Mother class for frequency domain photonics problems numerically described using FDFD.
+    Mother class for frequency domain problems with finite difference discretization.
+
     To allow for lazy initialization, only demands omega upon init
     
     Specification of the photonics design objective:
-    if sparseQCQP is False, the objective is specified as a quadratic function of the polarization p
-    max_p -p^dagger A0 p + 2 Re (p^dagger s0) + c0
+    if sparseQCQP is False, the objective is specified as a quadratic function of the 
+    polarization p: max_p -p^dagger A0 p + 2 Re (p^dagger s0) + c0
     
-    if sparseQCQP is True, the objective is specified as a quadratic function of (Gp)
+    if sparseQCQP is True, the objective is specified as a quadratic function of (Gp):
     max_{Gp} -(Gp)^dagger A0 (Gp) + 2 Re((Gp)^dagger s0) + c0
     
     Attributes
@@ -69,6 +74,7 @@ class Photonics_FDFD():
     c0 : float
         The constant c0 in the QCQP field design objective. 
     """
+
     def __init__(self, omega, chi=None, Nx=None, Ny=None, Npmlx=None, Npmly=None, dx=None, dy=None, # FDFD solver attr
                  des_mask=None, ji=None, ei=None, chi_background=None, # design problem attr
                  bloch_x=0.0, bloch_y=0.0, # FDFD solver attr
@@ -340,7 +346,7 @@ class Photonics_TM_FDFD(Photonics_FDFD):
                 self.setup_EM_operators()
             
             A1_dense = np.conj(1.0/self.chi)*np.eye(self.G.shape[0]) - self.G.conj().T
-
+            print(self.A0.shape, self.s0.shape, self.c0, A1_dense.shape, self.ei[self.des_mask].shape)
             self.QCQP = DenseSharedProjQCQP(self.A0, self.s0, self.c0,
                                             A1_dense, self.ei[self.des_mask]/2,
                                             self.Plist, verbose=verbose

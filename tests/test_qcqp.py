@@ -265,20 +265,22 @@ class TestQCQP:
             hess_opt, np.load(data / 'ldos_opthess.npy'), rtol=1e-1
         ), "Hessian does not match optimal Hessian."
         
-        # print("Testing iterative splitting step")
-        # results = [] 
-        # result_counter = 0
-        # for result in sparse_ldos_qcqp.iterative_splitting_step():
-        #     results.append((sparse_ldos_qcqp.Pdiags.shape[1], result[0]))
-        #     result_counter += 1
-        #     if result_counter > 0:
-        #         assert results[result_counter - 1][1] >= result[0], (
-        #             "Iterative splitting step must decrease dualval."
-        #         )
-        #     # Limit to avoid excessive iterations (run full test manually for rigor).
-        #     if sparse_ldos_qcqp.Pdiags.shape[1] > 4:
-        #         break
-        # print(results)
+        print("Testing iterative splitting step (sparse)")
+        results = []
+        result_counter = 0
+        initial_num = sparse_ldos_qcqp.n_proj_constr
+        for result in sparse_ldos_qcqp.iterative_splitting_step():
+            results.append((sparse_ldos_qcqp.n_proj_constr, result[0]))
+            if result_counter > 0:
+                # ensure dual is non-increasing as constraints refine
+                assert results[result_counter - 1][1] >= result[0], (
+                    "Iterative splitting step must decrease dual value."
+                )
+            result_counter += 1
+            # Limit iterations for test runtime
+            if result_counter >= 4 or sparse_ldos_qcqp.n_proj_constr > initial_num + 4:
+                break
+        print(results)
 
         # print("Testing the merging of constraints")
         # from dolphindes.cvxopt import gcd
@@ -405,6 +407,21 @@ class TestQCQP:
             dual_lambda, get_grad=True, get_hess=True
         )
 
+        print("Testing iterative splitting step (dense)")
+        results = []
+        result_counter = 0
+        initial_num = dense_ldos_qcqp.n_proj_constr
+        for result in dense_ldos_qcqp.iterative_splitting_step():
+            results.append((dense_ldos_qcqp.n_proj_constr, result[0]))
+            if result_counter > 0:
+                assert results[result_counter - 1][1] >= result[0], (
+                    "Iterative splitting step must decrease dual value."
+                )
+            result_counter += 1
+            if result_counter >= 4 or dense_ldos_qcqp.n_proj_constr > initial_num + 4:
+                break
+        print(results)
+
     @pytest.mark.dependency(depends=["sparse_test", "dense_test"])
     def test_compare_dual_results(self, dual_results):
         """Compare dual results from BFGS and Newton (sparse vs. dense)."""
@@ -520,7 +537,7 @@ def test_dense_qcqp_only_general_constraint():
     assert np.linalg.norm(grad_opt) < 1e-3, "Gradient not (near) zero at optimum."
 
 def test_sparse_qcqp_with_nondiagonal_projectors():
-    """Smoke test: sparse QCQP with non-diagonal (Hermitian) projectors runs end-to-end."""
+    """Sparse QCQP with non-diagonal (Hermitian) projectors runs end-to-end."""
     n = 4
     # Non-diagonal Hermitian projectors: P = u u^H
     u1 = (np.eye(n)[:, 0] + np.eye(n)[:, 1]) / np.sqrt(2)            # (e0 + e1)/sqrt(2)
@@ -553,7 +570,7 @@ def test_sparse_qcqp_with_nondiagonal_projectors():
     assert xstar.shape[0] == n
 
 def test_dense_qcqp_with_nondiagonal_projectors():
-    """Smoke test: dense QCQP with non-diagonal (Hermitian) projectors runs end-to-end."""
+    """Dense QCQP with non-diagonal (Hermitian) projectors runs end-to-end."""
     n = 4
     # Non-diagonal Hermitian projectors: P = u u^H
     u1 = (np.eye(n)[:, 0] + np.eye(n)[:, 1]) / np.sqrt(2)
