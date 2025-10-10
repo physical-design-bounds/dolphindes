@@ -1,8 +1,8 @@
 """
 Dual Problem Interface for Quadratically Constrained Quadratic Programming (QCQP).
 
-This module provides interfaces for solving QCQP problems with shared projection 
-constraints using dual optimization methods. It includes both sparse and dense 
+This module provides interfaces for solving QCQP problems with shared projection
+constraints using dual optimization methods. It includes both sparse and dense
 implementations optimized for different matrix structures.
 """
 
@@ -139,7 +139,7 @@ class SparseSharedProjQCQP(_SharedProjQCQP):
             if name != "Acho":
                 setattr(new_QCQP, name, copy.deepcopy(value, memo))
 
-        new_QCQP._initialize_Acho()  # Recompute the Cholesky factorization. 
+        new_QCQP._initialize_Acho()  # Recompute the Cholesky factorization.
         # If dense, will use self.current_lags.
         # TODO: update Acho with current_lags if applicable
         return new_QCQP
@@ -219,6 +219,7 @@ class SparseSharedProjQCQP(_SharedProjQCQP):
         except sksparse.cholmod.CholmodNotPositiveDefiniteError:
             return False
 
+
 class DenseSharedProjQCQP(_SharedProjQCQP):
     """Dense QCQP with projector-structured constraints.
 
@@ -259,6 +260,7 @@ class DenseSharedProjQCQP(_SharedProjQCQP):
         A1: ArrayLike,
         s1: ArrayLike,
         Pdiags: ArrayLike,
+        Pstruct: ArrayLike | None = None,
         A2: ArrayLike | None = None,
         B_j: list[ArrayLike] | None = None,
         s_2j: list[ArrayLike] | None = None,
@@ -269,8 +271,18 @@ class DenseSharedProjQCQP(_SharedProjQCQP):
             A2 = sp.eye_array(len(s0), format="csc")
 
         super().__init__(
-            A0, s0, c0, A1, A2, s1, Pdiags,
-            B_j=B_j, s_2j=s_2j, c_2j=c_2j, verbose=verbose
+            A0,
+            s0,
+            c0,
+            A1,
+            A2,
+            s1,
+            Pdiags,
+            Pstruct,
+            B_j=B_j,
+            s_2j=s_2j,
+            c_2j=c_2j,
+            verbose=verbose,
         )
 
     def __repr__(self) -> str:
