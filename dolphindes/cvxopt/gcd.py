@@ -33,24 +33,23 @@ def merge_lead_constraints(QCQP: _SharedProjQCQP, merged_num: int = 2) -> None:
     ValueError
         If merged_num < 2 or if there are insufficient constraints for merging.
     """
-    x_size, cstrt_num = QCQP.Pdiags.shape
+
+    cstrt_num = len(QCQP.Proj)
     if merged_num < 2:
         raise ValueError("Need at least 2 constraints for merging.")
     if cstrt_num < merged_num:
         raise ValueError("Number of constraints insufficient for size of merge.")
 
-    new_Pdiags = np.zeros((x_size, cstrt_num - merged_num + 1), dtype=complex)
-    new_lags = np.zeros(cstrt_num - merged_num + 1, dtype=float)
-    new_Pdiags[:, 0] = QCQP.Pdiags[:, :merged_num] @ QCQP.current_lags[:merged_num]
+    new_P = QCQP.Proj.Pstruct.astype(complex, copy=True)
+    new_P.data[:] = 0.0
+    for i in range(merged_num):
+        new_P += QCQP.current_lags[i] * QCQP.Proj[i]
 
-    # normalize merged Pdiag
-    Pnorm = la.norm(new_Pdiags[:, 0])
-    new_Pdiags[:, 0] /= Pnorm
-    new_lags[0] = Pnorm
+    Pnorm = la.norm(new_P.data)
+    new_P /= Pnorm
 
-    # put other constraints in
-    new_Pdiags[:, 1:] = QCQP.Pdiags[:, merged_num:]
-    new_lags[1:] = QCQP.current_lags[merged_num:]
+    QCQP.Proj[merged_num - 1] = new_P
+    QCQP.Proj.erase_leading(merged_num - 1)  
 
     # update QCQP
     if hasattr(QCQP, "precomputed_As"):
@@ -64,13 +63,15 @@ def merge_lead_constraints(QCQP: _SharedProjQCQP, merged_num: int = 2) -> None:
         del QCQP.precomputed_As[: merged_num - 1]
 
     if hasattr(QCQP, "Fs"):
-        new_Fs = np.zeros((x_size, cstrt_num - merged_num + 1), dtype=complex)
-        new_Fs[:, 0] = QCQP.A2.conj().T @ (new_Pdiags[:, 0].conj() * QCQP.s1)
-        new_Fs[:, 1:] = QCQP.Fs[:, merged_num:]
-        QCQP.Fs = new_Fs
+        QCQP.Fs = QCQP.Fs[:, merged_num-1:]
+        if sp.issparse(new_P):
+            QCQP.Fs[:,0] = QCQP.A2.conj().T @ (new_P.conj().T @ QCQP.s1)
+        else:
+            QCQP.Fs[:,0] = QCQP.A2.conj().T @ (new_P.conj() * QCQP.s1)
 
-    QCQP.Pdiags = new_Pdiags
-    QCQP.current_lags = new_lags
+    QCQP.current_lags = QCQP.current_lags[merged_num-1:]
+    QCQP.current_lags[0] = Pnorm
+    
     QCQP.current_grad = QCQP.current_hess = (
         None  # in principle can merge dual derivatives but leave it undone for now
     )

@@ -286,26 +286,30 @@ class TestQCQP:
                 break
         print(results)
 
-        # print("Testing the merging of constraints")
-        # from dolphindes.cvxopt import gcd
-        # sparse_ldos_qcqp.compute_precomputed_values()
-        # dual_opt, dual_grad, dual_hess, _ = sparse_ldos_qcqp.get_dual(
-        #     sparse_ldos_qcqp.current_lags, get_grad=True, get_hess=True
-        # )
+        print("Testing the merging of constraints")
+        from dolphindes.cvxopt import gcd
+        sparse_ldos_qcqp.compute_precomputed_values()
+        dual_opt, dual_grad, dual_hess, _ = sparse_ldos_qcqp.get_dual(
+            sparse_ldos_qcqp.current_lags, get_grad=True, get_hess=True
+        )
 
-        # gcd.merge_lead_constraints(sparse_ldos_qcqp, 5)
-        # merged_dual, merged_grad, merged_hess, _ = sparse_ldos_qcqp.get_dual(
-        #     sparse_ldos_qcqp.current_lags, get_grad=True, get_hess=True
-        # )
-        # assert np.allclose(
-        #     dual_opt, merged_dual, atol=1e-2
-        # ), "dual value changed after constraint merge."
-        # assert np.allclose(
-        #     dual_grad[-5:], merged_grad[-5:], atol=1e-2
-        # ), "dual grad changed after constraint merge."
-        # assert np.allclose(
-        #     dual_hess[-5:, -5:], merged_hess[-5:, -5:], rtol=1e-2
-        # ), "dual Hess changed after constraint merge."
+        if added_str == "global":
+            cstrt_merge_num = 2
+        else:
+            cstrt_merge_num = 5
+        gcd.merge_lead_constraints(sparse_ldos_qcqp, cstrt_merge_num)
+        merged_dual, merged_grad, merged_hess, _ = sparse_ldos_qcqp.get_dual(
+            sparse_ldos_qcqp.current_lags, get_grad=True, get_hess=True
+        )
+        assert np.allclose(
+            dual_opt, merged_dual, atol=1e-2
+        ), "dual value changed after constraint merge."
+        assert np.allclose(
+            dual_grad[-5:], merged_grad[-5:], atol=1e-2
+        ), "dual grad changed after constraint merge."
+        assert np.allclose(
+            dual_hess[-5:, -5:], merged_hess[-5:, -5:], rtol=1e-2
+        ), "dual Hess changed after constraint merge."
 
     @pytest.mark.dependency(name="dense_test")
     def test_dense_qcqp(self, dense_qcqp_data, dual_results):
