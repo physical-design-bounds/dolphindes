@@ -55,8 +55,8 @@ class _SharedProjQCQP(ABC):
         Linear term vectors for general constraints.
     c_2j : ArrayLike
         Constant terms for general constraints.
-    Pdiags : ArrayLike
-        Matrix whose columns are the diagonals of the projector matrices P_j.
+    Proj : Projectors
+        dolphindes Projectors object representing all projector matrices P_j.
     verbose : int
         Verbosity level (0 = silent).
     Acho : Any | None
@@ -149,9 +149,12 @@ class _SharedProjQCQP(ABC):
             self.c_2j = np.asarray(c_2j, dtype=float)
 
         if Pstruct is None:
-            Pstruct = Plist[0]
-        else:
-            Pstruct = sp.csc_array(Pstruct)
+            # capture Pstruct as the superset of all sparsity structures in Plist 
+            Pstruct = Plist[0].copy()
+            for P in Plist:
+                Pstruct += np.random.rand() * P
+
+        Pstruct = sp.csc_array(Pstruct)
 
         self.Proj = Projectors(Plist, Pstruct)
         self.n_proj_constr = len(np.asarray(Plist, dtype=object))
