@@ -24,7 +24,7 @@ class Projectors():
     ----------
     Plist : ArrayLike
         List of sparse projector matrices.
-    PStruct : sp.csc_array
+    Pstruct : sp.csc_array
         Structure of the projectors (not used in this implementation).
     force_general : bool, optional
         If true, treat all projectors as general sparse matrices even if diagonal.
@@ -53,7 +53,7 @@ class Projectors():
             # Allow empty projector list
             self._k = 0
             self._n = None
-            self._is_diagonal = True  # vacuously true
+            self._is_diagonal = _detect_all_diagonal(Pstruct)
             # Nothing else to build (no Pdiags/Pstack*)
             return
 
@@ -62,9 +62,9 @@ class Projectors():
             raise ValueError("All projectors must be square and have the same shape.")
         self._n = n
         self._k = len(self.Plist)
-        self._is_diagonal = _detect_all_diagonal(self.Plist)
+        self._is_diagonal = _detect_all_diagonal(self.Plist) and not force_general
 
-        if self._is_diagonal and not force_general:
+        if self._is_diagonal:
             self.Pdiags = np.column_stack([P.diagonal() for P in self.Plist])
         else:
             # Build vertical stacks for both P and P^† to avoid runtime transposes
