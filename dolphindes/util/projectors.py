@@ -38,8 +38,8 @@ class Projectors():
     ) -> None:
         self.Plist = []
         Pm = sp.csc_array(Pstruct)
-        Pm = Pm.astype(float, copy=True)
-        Pm.data[:] = 1.0 
+        Pm = Pm.astype(bool, copy=True)
+        Pm.data[:] = True
         self.Pstruct = Pm
 
         for P in Plist:
@@ -76,8 +76,11 @@ class Projectors():
         """Check if P is a valid projector (correct shape, subset of Pstruct)."""
         if P.shape != self.Pstruct.shape:
             return False
-        outside = (P != 0).multiply(self.Pstruct == 0)
-        return (outside.nnz == 0)
+        Ptest = P.astype(bool, copy=True)
+        Ptest.data[:] = True
+        # for bool sparse arrays, + is OR and - is XOR
+        outside = Ptest + self.Pstruct - self.Pstruct
+        return outside.nnz == 0
 
     def _getitem_diagonal(self, key: int) -> sp.csc_array:
         return sp.diags_array(self.Pdiags[:, key], format='csc')
