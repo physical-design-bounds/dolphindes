@@ -159,7 +159,6 @@ class SparseSharedProjQCQP(_SharedProjQCQP):
             Analyzed (symbolic) factorization handle stored in self.Acho.
         """
         random_lags = np.random.rand(self.n_proj_constr + self.n_gen_constr)
-        # P = self._add_projectors(random_lags)
         A = self._get_total_A(random_lags)
         if self.verbose > 1:
             print(

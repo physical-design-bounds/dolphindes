@@ -53,7 +53,7 @@ class Projectors():
             # Allow empty projector list
             self._k = 0
             self._n = None
-            self._is_diagonal = _detect_all_diagonal(Pstruct)
+            self._is_diagonal = _detect_all_diagonal([Pstruct])
             # Nothing else to build (no Pdiags/Pstack*)
             return
 

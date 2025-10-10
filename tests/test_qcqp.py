@@ -160,8 +160,6 @@ class TestQCQP:
         data = sparse_qcqp_data["data_path"]
         added_str = sparse_qcqp_data["added_str"]
 
-        combined_projector = sparse_ldos_qcqp._add_projectors(lags)
-
         print("Testing totalA = known total A")
         ref_totalA = sp.load_npz(data / "ldos_sparse_totalA.npz")
         calc_totalA = sparse_ldos_qcqp._get_total_A(lags)
@@ -321,7 +319,6 @@ class TestQCQP:
         lags_optimal = dense_qcqp_data["lags_optimal"]
         data = dense_qcqp_data["data_path"]
         # (No additional scalar constants needed.)
-        combined_projector = dense_ldos_qcqp._add_projectors(lags)
 
         print("Testing totalA = known total A")
         ref_totalA = np.load(data / "ldos_dense_totalA.npy")
