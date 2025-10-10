@@ -9,6 +9,7 @@ __all__ = []
 
 import warnings
 from typing import Tuple
+import copy  # added
 
 import numpy as np
 import scipy.sparse as sp
@@ -104,7 +105,18 @@ class Photonics_FDFD():
         self.s0 = s0
         self.c0 = c0
         self.Pdiags = Pdiags
-        
+
+    def __deepcopy__(self, memo):
+        """Deep copy this instance."""
+        cls = self.__class__
+        new = cls.__new__(cls)
+        memo[id(self)] = new
+        for k, v in self.__dict__.items():
+            try:
+                setattr(new, k, copy.deepcopy(v, memo))
+            except Exception:
+                setattr(new, k, v)  # fallback to reference
+        return new
 
 class Photonics_TM_FDFD(Photonics_FDFD):
     def __init__(self, omega, chi=None, 
@@ -174,10 +186,14 @@ class Photonics_TM_FDFD(Photonics_FDFD):
             if A0 is not None:
                 self.A0 = self.Ginv.T.conj() @ sp.csc_array(A0) @ self.Ginv
             if s0 is not None:
+                self.dense_s0 = s0
                 self.s0 = self.Ginv.T.conj() @ s0
         else:
-            if A0 is not None: self.A0 = A0
-            if s0 is not None: self.s0 = s0
+            if A0 is not None: 
+                self.A0 = A0
+            if s0 is not None: 
+                self.s0 = s0
+                self.dense_s0 = None
         
         if c0 is not None: self.c0 = c0
 
@@ -477,7 +493,6 @@ class Photonics_TM_FDFD(Photonics_FDFD):
 class Photonics_TE_Yee_FDFD(Photonics_FDFD):
     def __init__(self):
         pass
-
 
 ## Utility functions for photonics problems
 

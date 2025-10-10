@@ -11,7 +11,7 @@ from dolphindes.types import ComplexArray, FloatNDArray
 np.random.seed(0)
 
 
-def _generate_psd_matrix(n: int, cond_number: int=1000) -> FloatNDArray:
+def _generate_psd_matrix(n: int, cond_number: int = 1000) -> FloatNDArray:
     """Generate a random positive semi-definite matrix."""
     Q, _ = np.linalg.qr(np.random.randn(n, n))  # Random orthogonal matrix
     eigenvalues = np.logspace(0, np.log10(cond_number), n)  # Spread eigenvalues
@@ -91,6 +91,7 @@ def test_bfgs_optimum(_optimization_setup: Dict[str, Any]) -> None:
     assert np.allclose(
         fx, setup["optfunc"](setup["analytical_solution"])[0], atol=setup["opttol"]
     )
+
 
 def test_newton_optimum(_optimization_setup: Dict[str, Any]) -> None:
     """Test Newton routine."""

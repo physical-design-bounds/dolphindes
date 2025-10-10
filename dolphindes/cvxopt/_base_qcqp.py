@@ -16,7 +16,7 @@ from .optimization import BFGS, Alt_Newton_GD, _Optimizer
 
 class _SharedProjQCQP(ABC):
     """Represents a quadratically constrained quadratic program (QCQP).
-    
+
     QCQP has a set of projection-structured (shared) constraints and (optionally) a
     separate list of general quadratic constraints.
 
@@ -95,8 +95,8 @@ class _SharedProjQCQP(ABC):
         A1: ArrayLike | sp.csc_array,
         A2: ArrayLike | sp.csc_array,
         s1: ArrayLike,
-        # Pdiags: ArrayLike,
         Plist: ArrayLike,
+        Pstruct: ArrayLike | sp.csc_array | None = None,
         B_j: list[ArrayLike | sp.csc_array] | None = None,
         s_2j: list[ArrayLike] | None = None,
         c_2j: ArrayLike | None = None,
@@ -105,16 +105,16 @@ class _SharedProjQCQP(ABC):
         if B_j is None:
             all_mat_sp = [sp.issparse(A0), sp.issparse(A1)]
         else:
-            all_mat_sp = (
-                [sp.issparse(Bj) for Bj in B_j]
-                + [sp.issparse(A0), sp.issparse(A1)]
-            )
+            all_mat_sp = [sp.issparse(Bj) for Bj in B_j] + [
+                sp.issparse(A0),
+                sp.issparse(A1),
+            ]
         # A2 may be sparse even if using dense formulation
         all_sparse = np.all(all_mat_sp)
         all_dense = not np.any(all_mat_sp)
-        assert (
-            all_sparse or all_dense
-        ), "All quadratic matrices must be either sparse or dense."
+        assert all_sparse or all_dense, (
+            "All quadratic matrices must be either sparse or dense."
+        )
 
         if all_sparse:
             self.A0 = sp.csc_array(A0)
@@ -148,9 +148,14 @@ class _SharedProjQCQP(ABC):
         else:
             self.c_2j = np.asarray(c_2j, dtype=float)
 
-        self.Proj = Projectors(Plist)    
+        if Pstruct is None:
+            Pstruct = Plist[0]
+        else:
+            Pstruct = sp.csc_array(Pstruct)
+
+        self.Proj = Projectors(Plist, Pstruct)
         self.n_proj_constr = len(np.asarray(Plist, dtype=object))
-        self.n_gen_constr = len(self.B_j)     
+        self.n_gen_constr = len(self.B_j)
 
         assert len(self.c_2j) == len(self.s_2j), (
             "Length of c_2j must match length of s_2j."
@@ -201,7 +206,6 @@ class _SharedProjQCQP(ABC):
         # For diagonal P: allP_at_v(self.s1, dagger=True) == (Pdiags.conj().T * s1).T
         Pv = self.Proj.allP_at_v(self.s1, dagger=True)  # shape (n, k)
         self.Fs = self.A2.conj().T @ Pv  # shape (m, k)
-        
 
     def get_number_constraints(self) -> int:
         """Return total number of constraints (projector + general)."""
@@ -334,14 +338,14 @@ class _SharedProjQCQP(ABC):
         FloatNDArray
             Feasible initial lags (projector first, then zeros for general constraints).
         """
-        if (self.current_lags is not None):
+        if self.current_lags is not None:
             if self.is_dual_feasible(self.current_lags):
                 return self.current_lags
 
         # Start with small positive lags
         init_lags = np.random.random(self.n_proj_constr) * 1e-6
         init_lags = np.append(init_lags, len(self.B_j) * [0.0])
-        
+
         init_lags[1] = start
         while self.is_dual_feasible(init_lags) is False:
             init_lags[1] *= 1.5
@@ -396,7 +400,7 @@ class _SharedProjQCQP(ABC):
         xAx : float
             Value x*^† A x* (real scalar).
         """
-        Blags = lags[-self.n_gen_constr:] if self.n_gen_constr > 0 else np.array([])
+        Blags = lags[-self.n_gen_constr :] if self.n_gen_constr > 0 else np.array([])
         A = self._get_total_A(lags)
         S = self._get_total_S(lags[: self.n_proj_constr], Blags)
         self._update_Acho(A)
@@ -451,8 +455,8 @@ class _SharedProjQCQP(ABC):
         grad_penalty, hess_penalty = np.array([]), np.array([[]])
 
         xstar, dualval = self._get_xstar(lags)
-        Blags = lags[-self.n_gen_constr:] if self.n_gen_constr > 0 else np.array([])
-        dualval += (self.c0 + self._get_total_C(Blags))
+        Blags = lags[-self.n_gen_constr :] if self.n_gen_constr > 0 else np.array([])
+        dualval += self.c0 + self._get_total_C(Blags)
 
         if get_hess:
             if not hasattr(self, "precomputed_As"):
@@ -501,20 +505,23 @@ class _SharedProjQCQP(ABC):
             #   term2    =  2 Re(y^H Ps1_dag)             (k,)
             # For diagonal P, Py == Pdiags ⊙ y and Ps1_dag == Pdiags^* ⊙ s1, so the
             # new expressions reduce exactly to the legacy vectorized formulas above.
-            A2_xstar = self.A2 @ xstar                  # (n,)  aka y
-            u = self.A1.conj().T @ xstar                # (n,)  aka A1^H x*
-            Py = self.Proj.allP_at_v(A2_xstar)          # (n, k)  columns: P_j y
+            A2_xstar = self.A2 @ xstar  # (n,)  aka y
+            u = self.A1.conj().T @ xstar  # (n,)  aka A1^H x*
+            Py = self.Proj.allP_at_v(A2_xstar)  # (n, k)  columns: P_j y
 
-            term1 = -np.real(u.conj() @ Py)             # (k,)
-            term2 =  2 * np.real(xstar.conj() @ self.Fs)  # (k,)
+            term1 = -np.real(u.conj() @ Py)  # (k,)
+            term2 = 2 * np.real(xstar.conj() @ self.Fs)  # (k,)
             grad = term1 + term2
 
             if self.n_gen_constr > 0:
                 gen_constr_grad = np.zeros(self.n_gen_constr)
                 for i in range(self.n_gen_constr):
                     gen_constr_grad[i] = np.real(
-                        -xstar.conj().T @ self.A2.conj().T @ self.B_j[i] @ 
-                        self.A2 @ xstar
+                        -xstar.conj().T
+                        @ self.A2.conj().T
+                        @ self.B_j[i]
+                        @ self.A2
+                        @ xstar
                         + 2 * xstar.conj().T @ self.A2.conj().T @ self.s_2j[i]
                         + self.c_2j[i]
                     )
@@ -549,7 +556,6 @@ class _SharedProjQCQP(ABC):
                     raise NotImplementedError(
                         "Hessian computation with general constraints not implemented."
                     )
-                
 
             elif get_grad:
                 grad = cast(FloatNDArray, grad)
@@ -745,7 +751,7 @@ class _SharedProjQCQP(ABC):
         gcd_tol: float = 1e-2,
     ) -> None:
         """Run GCD to approach tightest dual bound for this QCQP.
-        
+
         See module-level run_gcd() for details. Modifies the existing QCQP object.
 
         Parameters
@@ -805,9 +811,11 @@ class _SharedProjQCQP(ABC):
         # Extract old projectors and lags
         old_proj_count = self.n_proj_constr
         old_proj_lags = np.array(self.current_lags[:old_proj_count], float)
-        old_gen_lags = np.array(
-            self.current_lags[old_proj_count:], float
-        ) if self.n_gen_constr > 0 else np.array([], float)
+        old_gen_lags = (
+            np.array(self.current_lags[old_proj_count:], float)
+            if self.n_gen_constr > 0
+            else np.array([], float)
+        )
 
         new_Plist = []
         new_proj_lags_list = []
@@ -829,8 +837,10 @@ class _SharedProjQCQP(ABC):
 
             # Build diagonal masks S1, S2 (0-1 on selected columns)
             n = Pj.shape[1]
-            mask1 = np.zeros(n, dtype=float); mask1[idx1] = 1.0
-            mask2 = np.zeros(n, dtype=float); mask2[idx2] = 1.0
+            mask1 = np.zeros(n, dtype=float)
+            mask1[idx1] = 1.0
+            mask2 = np.zeros(n, dtype=float)
+            mask2[idx2] = 1.0
             S1 = sp.diags_array(mask1, format="csc")
             S2 = sp.diags_array(mask2, format="csc")
 
@@ -845,13 +855,11 @@ class _SharedProjQCQP(ABC):
             new_proj_lags_list.append(old_proj_lags[j])
 
         # Replace projectors and update counts
-        self.Proj = Projectors(new_Plist)
+        self.Proj = Projectors(new_Plist, self.Proj.Pstruct)
         self.n_proj_constr = len(new_Plist)
 
         # New lags: concatenated projector lags + unchanged general lags
-        new_lags = np.concatenate(
-            [np.array(new_proj_lags_list, float), old_gen_lags]
-        )
+        new_lags = np.concatenate([np.array(new_proj_lags_list, float), old_gen_lags])
         self.current_lags = new_lags
 
         self.compute_precomputed_values()
@@ -860,8 +868,9 @@ class _SharedProjQCQP(ABC):
         new_dual = self.get_dual(self.current_lags, get_grad=False)[0]
         if self.verbose >= 1:
             print(f"previous dual: {old_dual}, new dual: {new_dual} (should match)")
-        assert np.isclose(new_dual, old_dual, rtol=1e-2, atol=1e-8), \
+        assert np.isclose(new_dual, old_dual, rtol=1e-2, atol=1e-8), (
             "Dual value should be unchanged after refinement."
+        )
 
         # Keep cached values consistent
         self.current_dual = new_dual
@@ -886,6 +895,7 @@ class _SharedProjQCQP(ABC):
         tuple
             (current_dual, current_lags, current_grad, current_hess, current_xstar)
         """
+
         def projector_column_support_sizes() -> np.ndarray:
             sizes = []
             for j in range(self.n_proj_constr):
@@ -916,5 +926,7 @@ class _SharedProjQCQP(ABC):
                 print(f"{self.n_proj_constr}")
 
             # Solve with the new refined projector set, warm-start with current_lags
-            result = self.solve_current_dual_problem(method, init_lags=self.current_lags)
+            result = self.solve_current_dual_problem(
+                method, init_lags=self.current_lags
+            )
             yield result

@@ -18,86 +18,28 @@ from dolphindes.cvxopt import DenseSharedProjQCQP, SparseSharedProjQCQP
 @pytest.fixture
 def data_dir():
     """Return the path to the reference data directory."""
-    return Path(os.path.dirname(__file__)) / "reference_arrays" / "qcqp_example" / "sparse"  # noqa: E501
+    return (
+        Path(os.path.dirname(__file__)) / "reference_arrays" / "qcqp_example" / "sparse"
+    )  # noqa: E501
 
 
-@pytest.fixture(params=['global', 'local'])
+@pytest.fixture(params=["global", "local"])
 def sparse_qcqp_data(data_dir, request):
     """Fixture to load data and initialize SparseSharedProjQCQP."""
     added_str = request.param
     print(f"\nLoading data for: {added_str} constraints")
     data_path = data_dir / added_str
-    lags = np.load(data_path / 'ldos_sparse_lags.npy', allow_pickle=True)
+    lags = np.load(data_path / "ldos_sparse_lags.npy", allow_pickle=True)
     lags_optimal = np.load(
-        data_path / 'ldos_sparse_lags_optimal.npy', allow_pickle=True
+        data_path / "ldos_sparse_lags_optimal.npy", allow_pickle=True
     )
-    A0 = sp.csc_array(sp.load_npz(data_path / 'ldos_sparse_A0.npz'))
-    A1 = sp.csc_array(sp.load_npz(data_path / 'ldos_sparse_A1.npz'))
-    A2 = sp.csc_array(sp.load_npz(data_path / 'ldos_sparse_A2.npz'))
-    s0 = np.load(data_path / 'ldos_sparse_s0.npy', allow_pickle=True)
-    s1 = np.load(data_path / 'ldos_sparse_s1.npy', allow_pickle=True)
+    A0 = sp.csc_array(sp.load_npz(data_path / "ldos_sparse_A0.npz"))
+    A1 = sp.csc_array(sp.load_npz(data_path / "ldos_sparse_A1.npz"))
+    A2 = sp.csc_array(sp.load_npz(data_path / "ldos_sparse_A2.npz"))
+    s0 = np.load(data_path / "ldos_sparse_s0.npy", allow_pickle=True)
+    s1 = np.load(data_path / "ldos_sparse_s1.npy", allow_pickle=True)
     projections_diags = np.load(
-        data_path / 'ldos_some_projections.npy', 
-        allow_pickle=True
-    )
-    # Interleave projections_diags and projections_diags * -1j
-    projections_diags = np.asarray(projections_diags)
-    interleaved = np.empty(
-        (2 * projections_diags.shape[0], projections_diags.shape[1]),
-        dtype=complex
-    )
-    interleaved[0::2] = projections_diags
-    interleaved[1::2] = projections_diags * -1j
-    projections_diags = interleaved
-    Pdiags = projections_diags.T
-
-    c = np.load(data_path / 'ldos_dualconst.npy', allow_pickle=True)
-
-    # Build list of diagonal projectors from Pdiags
-    Projlist = [sp.diags_array(Pdiags[:, j], format="csc") for j in range(Pdiags.shape[1])]
-
-    sparse_ldos_qcqp_instance = SparseSharedProjQCQP(
-        A0, s0, c, A1, A2, s1, Projlist, verbose=0
-    )
-    
-    return {
-        "qcqp": sparse_ldos_qcqp_instance,
-        "lags": lags,
-        "lags_optimal": lags_optimal,
-        "A0": A0, "A1": A1, "A2": A2,
-        "s0": s0, "s1": s1,
-        "Pdiags": Pdiags,
-        "c": c,
-        "data_path": data_path,
-        "added_str": added_str
-    }
-
-
-@pytest.fixture
-def data_dir_dense():
-    """Return the path to the reference data directory."""
-    return (
-        Path(os.path.dirname(__file__))
-        / "reference_arrays"
-        / "qcqp_example"
-        / "dense"
-    )
-
-
-@pytest.fixture(params=['global', 'local'])
-def dense_qcqp_data(data_dir_dense, request):
-    """Fixture to load data and initialize DenseSharedProjQCQP."""
-    added_str = request.param
-    print(f"\nLoading data for: {added_str} constraints")
-    data_path = data_dir_dense / added_str
-    lags = np.load(data_path / 'ldos_dense_lags.npy', allow_pickle=True)
-    lags_optimal = np.load(data_path / 'ldos_dense_lags_optimal.npy', allow_pickle=True)
-    A0 = np.load(data_path / 'ldos_dense_A0.npy')
-    A1 = np.load(data_path / 'ldos_dense_A1.npy')
-    s0 = np.load(data_path / 'ldos_dense_s0.npy', allow_pickle=True)
-    s1 = np.load(data_path / 'ldos_dense_s1.npy', allow_pickle=True)
-    projections_diags = np.load(
-        data_path / 'ldos_some_projections.npy', allow_pickle=True
+        data_path / "ldos_some_projections.npy", allow_pickle=True
     )
     # Interleave projections_diags and projections_diags * -1j
     projections_diags = np.asarray(projections_diags)
@@ -109,25 +51,90 @@ def dense_qcqp_data(data_dir_dense, request):
     projections_diags = interleaved
     Pdiags = projections_diags.T
 
-    c = np.load(data_path / 'ldos_dualconst.npy', allow_pickle=True)
+    c = np.load(data_path / "ldos_dualconst.npy", allow_pickle=True)
 
     # Build list of diagonal projectors from Pdiags
-    Projlist = [sp.diags_array(Pdiags[:, j], format="csc") for j in range(Pdiags.shape[1])]
+    Projlist = [
+        sp.diags_array(Pdiags[:, j], format="csc") for j in range(Pdiags.shape[1])
+    ]
 
-    sparse_ldos_qcqp_instance = DenseSharedProjQCQP(
-        A0, s0, c, A1, s1, Projlist, None, verbose=0
+    sparse_ldos_qcqp_instance = SparseSharedProjQCQP(
+        A0, s0, c, A1, A2, s1, Projlist, Projlist[0], verbose=0
     )
-    
+
     return {
         "qcqp": sparse_ldos_qcqp_instance,
         "lags": lags,
         "lags_optimal": lags_optimal,
-        "A0": A0, "A1": A1, "A2": None,
-        "s0": s0, "s1": s1,
+        "A0": A0,
+        "A1": A1,
+        "A2": A2,
+        "s0": s0,
+        "s1": s1,
         "Pdiags": Pdiags,
         "c": c,
         "data_path": data_path,
-        "added_str": added_str
+        "added_str": added_str,
+    }
+
+
+@pytest.fixture
+def data_dir_dense():
+    """Return the path to the reference data directory."""
+    return (
+        Path(os.path.dirname(__file__)) / "reference_arrays" / "qcqp_example" / "dense"
+    )
+
+
+@pytest.fixture(params=["global", "local"])
+def dense_qcqp_data(data_dir_dense, request):
+    """Fixture to load data and initialize DenseSharedProjQCQP."""
+    added_str = request.param
+    print(f"\nLoading data for: {added_str} constraints")
+    data_path = data_dir_dense / added_str
+    lags = np.load(data_path / "ldos_dense_lags.npy", allow_pickle=True)
+    lags_optimal = np.load(data_path / "ldos_dense_lags_optimal.npy", allow_pickle=True)
+    A0 = np.load(data_path / "ldos_dense_A0.npy")
+    A1 = np.load(data_path / "ldos_dense_A1.npy")
+    s0 = np.load(data_path / "ldos_dense_s0.npy", allow_pickle=True)
+    s1 = np.load(data_path / "ldos_dense_s1.npy", allow_pickle=True)
+    projections_diags = np.load(
+        data_path / "ldos_some_projections.npy", allow_pickle=True
+    )
+    # Interleave projections_diags and projections_diags * -1j
+    projections_diags = np.asarray(projections_diags)
+    interleaved = np.empty(
+        (2 * projections_diags.shape[0], projections_diags.shape[1]), dtype=complex
+    )
+    interleaved[0::2] = projections_diags
+    interleaved[1::2] = projections_diags * -1j
+    projections_diags = interleaved
+    Pdiags = projections_diags.T
+
+    c = np.load(data_path / "ldos_dualconst.npy", allow_pickle=True)
+
+    # Build list of diagonal projectors from Pdiags
+    Projlist = [
+        sp.diags_array(Pdiags[:, j], format="csc") for j in range(Pdiags.shape[1])
+    ]
+
+    sparse_ldos_qcqp_instance = DenseSharedProjQCQP(
+        A0, s0, c, A1, s1, Projlist, Projlist[0], None, verbose=0
+    )
+
+    return {
+        "qcqp": sparse_ldos_qcqp_instance,
+        "lags": lags,
+        "lags_optimal": lags_optimal,
+        "A0": A0,
+        "A1": A1,
+        "A2": None,
+        "s0": s0,
+        "s1": s1,
+        "Pdiags": Pdiags,
+        "c": c,
+        "data_path": data_path,
+        "added_str": added_str,
     }
 
 
@@ -156,7 +163,7 @@ class TestQCQP:
         combined_projector = sparse_ldos_qcqp._add_projectors(lags)
 
         print("Testing totalA = known total A")
-        ref_totalA = sp.load_npz(data / 'ldos_sparse_totalA.npz')
+        ref_totalA = sp.load_npz(data / "ldos_sparse_totalA.npz")
         calc_totalA = sparse_ldos_qcqp._get_total_A(lags)
         assert sp.issparse(calc_totalA), "Total A should be a sparse matrix."
         assert sp.csr_array(calc_totalA).shape == ref_totalA.shape, (
@@ -167,7 +174,7 @@ class TestQCQP:
         )
 
         print("Testing totalS = known total S")
-        ref_totals = np.load(data / 'ldos_sparse_total_s.npy', allow_pickle=True)
+        ref_totals = np.load(data / "ldos_sparse_total_s.npy", allow_pickle=True)
         # Pass projector multipliers directly
         calc_totals = sparse_ldos_qcqp._get_total_S(lags, np.array([]))
         assert calc_totals.shape == ref_totals.shape, (
@@ -184,7 +191,7 @@ class TestQCQP:
         init_lags = sparse_ldos_qcqp.find_feasible_lags()
         dual, grad, hess, aux = sparse_ldos_qcqp.get_dual(init_lags, get_grad=True)
         assert dual is not None
-        print(f'some feasible dual : {dual}')
+        print(f"some feasible dual : {dual}")
         feasible = sparse_ldos_qcqp.is_dual_feasible(init_lags)
         assert feasible, "Dual is not feasible."
 
@@ -192,15 +199,14 @@ class TestQCQP:
             lags_optimal, get_grad=True, get_hess=False
         )
         assert dual is not None
-        print(f'optimal dual : {dual_opt}')
-        print(np.load(data / 'ldos_dualval.npy'))
-        assert np.allclose(
-            dual_opt, np.load(data / 'ldos_dualval.npy'), atol=1e-6
-        ), "Dual values do not match."\
-        
-        assert np.allclose(
-            grad_opt, np.load(data / 'ldos_optgrad.npy'), atol=1e-6
-        ), "Gradients do not match."
+        print(f"optimal dual : {dual_opt}")
+        print(np.load(data / "ldos_dualval.npy"))
+        assert np.allclose(dual_opt, np.load(data / "ldos_dualval.npy"), atol=1e-6), (
+            "Dual values do not match."
+        )
+        assert np.allclose(grad_opt, np.load(data / "ldos_optgrad.npy"), atol=1e-6), (
+            "Gradients do not match."
+        )
 
         print("Testing dualvalue of penalty vector")
         penalty, value = sparse_ldos_qcqp._get_PSD_penalty(lags_optimal)
@@ -211,27 +217,27 @@ class TestQCQP:
         )
         assert np.allclose(
             aux_opt_penalty.dualval_penalty,
-            np.load(data / 'ldos_dualval_penalty.npy'),
+            np.load(data / "ldos_dualval_penalty.npy"),
             atol=1e-6,
         ), "Penalty dual values do not match."
         assert np.allclose(
             aux_opt_penalty.grad_penalty,
-            np.load(data / 'ldos_grad_penalty.npy'),
+            np.load(data / "ldos_grad_penalty.npy"),
             atol=1e-6,
         ), "Penalty gradients do not match."
 
         print("Testing solving the dual problem with BFGS and Newton")
         current_dual, dual_lambda, current_grad, current_hess, xstar = (
-            sparse_ldos_qcqp.solve_current_dual_problem('bfgs', init_lags=init_lags)
+            sparse_ldos_qcqp.solve_current_dual_problem("bfgs", init_lags=init_lags)
         )
 
-        print(f'dual lambda: {dual_lambda}')
-        print(f'bound BFGS: {current_dual}')
-        
-        if added_str == 'global':
-            dual_results['sparse_bfgs_global'] = current_dual 
+        print(f"dual lambda: {dual_lambda}")
+        print(f"bound BFGS: {current_dual}")
+
+        if added_str == "global":
+            dual_results["sparse_bfgs_global"] = current_dual
         else:
-            dual_results['sparse_bfgs_local'] = current_dual
+            dual_results["sparse_bfgs_local"] = current_dual
 
         assert np.allclose(dual_lambda, lags_optimal, atol=1e-4), (
             "Dual lambda does not match optimal lags."
@@ -241,15 +247,15 @@ class TestQCQP:
         )
 
         current_dual, dual_lambda, current_grad, current_hess, xstar = (
-            sparse_ldos_qcqp.solve_current_dual_problem('newton', init_lags=init_lags)
+            sparse_ldos_qcqp.solve_current_dual_problem("newton", init_lags=init_lags)
         )
-        print(f'dual lambda newton: {dual_lambda}')
-        print(f'bound Newton: {current_dual}')
-        
-        if added_str == 'global':
-            dual_results['sparse_newton_global'] = current_dual
+        print(f"dual lambda newton: {dual_lambda}")
+        print(f"bound Newton: {current_dual}")
+
+        if added_str == "global":
+            dual_results["sparse_newton_global"] = current_dual
         else:
-            dual_results['sparse_newton_local'] = current_dual
+            dual_results["sparse_newton_local"] = current_dual
 
         assert np.allclose(dual_lambda, lags_optimal, atol=1e-4), (
             "Newton dual lambda does not match optimal lags."
@@ -261,10 +267,10 @@ class TestQCQP:
             dual_lambda, get_grad=True, get_hess=True
         )
         # Hessian values can be large, allow relative tolerance.
-        assert np.allclose(
-            hess_opt, np.load(data / 'ldos_opthess.npy'), rtol=1e-1
-        ), "Hessian does not match optimal Hessian."
-        
+        assert np.allclose(hess_opt, np.load(data / "ldos_opthess.npy"), rtol=1e-1), (
+            "Hessian does not match optimal Hessian."
+        )
+
         print("Testing iterative splitting step (sparse)")
         results = []
         result_counter = 0
@@ -288,8 +294,8 @@ class TestQCQP:
         # dual_opt, dual_grad, dual_hess, _ = sparse_ldos_qcqp.get_dual(
         #     sparse_ldos_qcqp.current_lags, get_grad=True, get_hess=True
         # )
-            
-            # gcd.merge_lead_constraints(sparse_ldos_qcqp, 5)
+
+        # gcd.merge_lead_constraints(sparse_ldos_qcqp, 5)
         # merged_dual, merged_grad, merged_hess, _ = sparse_ldos_qcqp.get_dual(
         #     sparse_ldos_qcqp.current_lags, get_grad=True, get_hess=True
         # )
@@ -302,9 +308,8 @@ class TestQCQP:
         # assert np.allclose(
         #     dual_hess[-5:, -5:], merged_hess[-5:, -5:], rtol=1e-2
         # ), "dual Hess changed after constraint merge."
-    
-    
-    @pytest.mark.dependency(name="dense_test") 
+
+    @pytest.mark.dependency(name="dense_test")
     def test_dense_qcqp(self, dense_qcqp_data, dual_results):
         """Test dense QCQP optimization vs. stored optimal values.
 
@@ -315,35 +320,35 @@ class TestQCQP:
         lags = dense_qcqp_data["lags"]
         lags_optimal = dense_qcqp_data["lags_optimal"]
         data = dense_qcqp_data["data_path"]
-    # (No additional scalar constants needed.)
+        # (No additional scalar constants needed.)
         combined_projector = dense_ldos_qcqp._add_projectors(lags)
 
         print("Testing totalA = known total A")
-        ref_totalA = np.load(data / 'ldos_dense_totalA.npy')
+        ref_totalA = np.load(data / "ldos_dense_totalA.npy")
         calc_totalA = dense_ldos_qcqp._get_total_A(lags)
         assert calc_totalA.shape == ref_totalA.shape, (
             "Shape of calculated total A does not match reference."
         )
-        assert np.allclose(
-            calc_totalA, ref_totalA, atol=1e-12, rtol=1e-12
-        ), "Calculated total A does not match reference total A."
+        assert np.allclose(calc_totalA, ref_totalA, atol=1e-12, rtol=1e-12), (
+            "Calculated total A does not match reference total A."
+        )
 
         print("Testing totalS = known total S")
-        ref_totals = np.load(data / 'ldos_dense_total_s.npy', allow_pickle=True)
+        ref_totals = np.load(data / "ldos_dense_total_s.npy", allow_pickle=True)
         # Pass projector multipliers directly
         calc_totals = dense_ldos_qcqp._get_total_S(lags, np.array([]))
         assert calc_totals.shape == ref_totals.shape, (
             "Shape of calculated total S does not match reference."
         )
-        assert np.allclose(
-            calc_totals, ref_totals, atol=1e-12, rtol=1e-12
-        ), "Calculated total S does not match reference total S."
+        assert np.allclose(calc_totals, ref_totals, atol=1e-12, rtol=1e-12), (
+            "Calculated total S does not match reference total S."
+        )
 
         init_dual, init_grad, hess, aux = dense_ldos_qcqp.get_dual(lags, get_grad=True)
-        print(init_grad, np.load(data / 'ldos_init_grad.npy'))
-        assert np.allclose(
-            init_grad, np.load(data / 'ldos_init_grad.npy')
-        ), "Initial grad does not match reference."
+        print(init_grad, np.load(data / "ldos_init_grad.npy"))
+        assert np.allclose(init_grad, np.load(data / "ldos_init_grad.npy")), (
+            "Initial grad does not match reference."
+        )
 
         print(
             "Testing dualval = known dualval and grad = known grad, as well as "
@@ -352,7 +357,7 @@ class TestQCQP:
         init_lags = dense_ldos_qcqp.find_feasible_lags()
         dual, grad, hess, aux = dense_ldos_qcqp.get_dual(init_lags, get_grad=True)
         assert dual is not None
-        print(f'some feasible dual : {dual}')
+        print(f"some feasible dual : {dual}")
         feasible = dense_ldos_qcqp.is_dual_feasible(init_lags)
         assert feasible, "Dual is not feasible."
 
@@ -360,23 +365,23 @@ class TestQCQP:
             lags_optimal, get_grad=True, get_hess=False
         )
         assert dual is not None
-        print(f'optimal dual : {dual_opt}')
-        print(np.load(data / 'ldos_dualval.npy'))
-        assert np.allclose(
-            dual_opt, np.load(data / 'ldos_dualval.npy'), atol=1e-6
-        ), "Dual values do not match."
+        print(f"optimal dual : {dual_opt}")
+        print(np.load(data / "ldos_dualval.npy"))
+        assert np.allclose(dual_opt, np.load(data / "ldos_dualval.npy"), atol=1e-6), (
+            "Dual values do not match."
+        )
         # TODO(alessio): investigate why this is not matching well.
-        assert np.allclose(
-            grad_opt, np.load(data / 'ldos_grad.npy')
-        ), "Gradients do not match."
+        assert np.allclose(grad_opt, np.load(data / "ldos_grad.npy")), (
+            "Gradients do not match."
+        )
 
         print("Testing solving the dual problem with BFGS and Newton")
         current_dual_bfgs, dual_lambda, current_grad, current_hess, xstar = (
-            dense_ldos_qcqp.solve_current_dual_problem('bfgs', init_lags=init_lags)
+            dense_ldos_qcqp.solve_current_dual_problem("bfgs", init_lags=init_lags)
         )
 
-        print(f'dual lambda: {dual_lambda}')
-        print(f'bound BFGS: {current_dual_bfgs}')
+        print(f"dual lambda: {dual_lambda}")
+        print(f"bound BFGS: {current_dual_bfgs}")
 
         assert np.allclose(dual_lambda, lags_optimal, atol=1e-4), (
             "Dual lambda does not match optimal lags."
@@ -386,16 +391,16 @@ class TestQCQP:
         )
 
         current_dual_newton, dual_lambda, current_grad, current_hess, xstar = (
-            dense_ldos_qcqp.solve_current_dual_problem('newton', init_lags=init_lags)
+            dense_ldos_qcqp.solve_current_dual_problem("newton", init_lags=init_lags)
         )
-        print(f'dual lambda newton: {dual_lambda}')
-        print(f'bound Newton: {current_dual_newton}')
-        if dense_qcqp_data["added_str"] == 'global':
-            dual_results['dense_bfgs_global'] = current_dual_bfgs
-            dual_results['dense_newton_global'] = current_dual_newton
+        print(f"dual lambda newton: {dual_lambda}")
+        print(f"bound Newton: {current_dual_newton}")
+        if dense_qcqp_data["added_str"] == "global":
+            dual_results["dense_bfgs_global"] = current_dual_bfgs
+            dual_results["dense_newton_global"] = current_dual_newton
         else:
-            dual_results['dense_bfgs_local'] = current_dual_bfgs
-            dual_results['dense_newton_local'] = current_dual_newton
+            dual_results["dense_bfgs_local"] = current_dual_bfgs
+            dual_results["dense_newton_local"] = current_dual_newton
 
         assert np.allclose(dual_lambda, lags_optimal, atol=1e-4), (
             "Newton dual lambda does not match optimal lags."
@@ -428,27 +433,28 @@ class TestQCQP:
         print("Comparing dual results from BFGS and Newton methods:")
         for key, value in dual_results.items():
             print(f"{key}: {value}")
-        
+
         assert np.allclose(
-            dual_results['sparse_bfgs_global'],
-            dual_results['dense_bfgs_global'],
+            dual_results["sparse_bfgs_global"],
+            dual_results["dense_bfgs_global"],
             atol=1e-2,
         ), "BFGS global results for sparse and dense do not match."
         assert np.allclose(
-            dual_results['sparse_newton_global'],
-            dual_results['dense_newton_global'],
+            dual_results["sparse_newton_global"],
+            dual_results["dense_newton_global"],
             atol=1e-2,
         ), "Newton global results for sparse and dense do not match."
         assert np.allclose(
-            dual_results['sparse_bfgs_local'],
-            dual_results['dense_bfgs_local'],
+            dual_results["sparse_bfgs_local"],
+            dual_results["dense_bfgs_local"],
             atol=1e-2,
         ), "BFGS local results for sparse and dense do not match."
         assert np.allclose(
-            dual_results['sparse_newton_local'],
-            dual_results['dense_newton_local'],
+            dual_results["sparse_newton_local"],
+            dual_results["dense_newton_local"],
             atol=1e-2,
         ), "Newton local results for sparse and dense do not match."
+
 
 def test_sparse_qcqp_with_general_constraint(sparse_qcqp_data):
     """Add one general constraint (||A2 x|| term) to sparse formulation."""
@@ -460,16 +466,18 @@ def test_sparse_qcqp_with_general_constraint(sparse_qcqp_data):
     s_2j = [np.zeros(n_rows_A2, dtype=complex)]
     c_2j = np.array([1.0])
     # Build list of diagonal projectors from Pdiags
-    Projlist = [sp.diags_array(Pdiags[:, j], format="csc") for j in range(Pdiags.shape[1])]
+    Projlist = [
+        sp.diags_array(Pdiags[:, j], format="csc") for j in range(Pdiags.shape[1])
+    ]
     qcqp_gc = SparseSharedProjQCQP(
-        A0, s0, c, A1, A2, s1, Projlist,
-        B_j=B_j, s_2j=s_2j, c_2j=c_2j, verbose=0
+        A0, s0, c, A1, A2, s1, Projlist, None, B_j=B_j, s_2j=s_2j, c_2j=c_2j, verbose=0
     )
     init_lags = qcqp_gc.find_feasible_lags()
     dual, lags, grad, hess, xstar = qcqp_gc.solve_current_dual_problem(
         "bfgs", init_lags=init_lags
     )
     print(f"[Sparse + general constraint] dual value: {dual}")
+
 
 def test_dense_qcqp_with_general_constraint(dense_qcqp_data):
     """Add one general constraint (||A2 x|| term) to dense formulation."""
@@ -481,10 +489,11 @@ def test_dense_qcqp_with_general_constraint(dense_qcqp_data):
     s_2j = [np.zeros(n_dim, dtype=complex)]
     c_2j = np.array([1.0])  # per user request
     # Build list of diagonal projectors from Pdiags
-    Projlist = [sp.diags_array(Pdiags[:, j], format="csc") for j in range(Pdiags.shape[1])]
+    Projlist = [
+        sp.diags_array(Pdiags[:, j], format="csc") for j in range(Pdiags.shape[1])
+    ]
     qcqp_gc = DenseSharedProjQCQP(
-        A0, s0, c, A1, s1, Projlist,
-        A2=None, B_j=B_j, s_2j=s_2j, c_2j=c_2j, verbose=0
+        A0, s0, c, A1, s1, Projlist, None, A2=None, B_j=B_j, s_2j=s_2j, c_2j=c_2j, verbose=0
     )
     init_lags = qcqp_gc.find_feasible_lags()
     dual, lags, grad, hess, xstar = qcqp_gc.solve_current_dual_problem(
@@ -492,25 +501,28 @@ def test_dense_qcqp_with_general_constraint(dense_qcqp_data):
     )
     print(f"[Dense + general constraint] dual value: {dual}")
 
+
 def test_dense_qcqp_only_general_constraint():
     """Solve tiny dense QCQP: maximize x1 + x2 s.t. ||x||^2 = 1."""
     # Problem data
     A0 = np.zeros((2, 2), dtype=complex)
-    A1 = np.zeros((2, 2), dtype=complex)          # Unused (no projectors)
-    s0 = 0.5 * np.ones(2, dtype=complex)          # Gives x1 + x2
+    A1 = np.zeros((2, 2), dtype=complex)  # Unused (no projectors)
+    s0 = 0.5 * np.ones(2, dtype=complex)  # Gives x1 + x2
     c0 = 0.0
-    s1 = np.zeros(2, dtype=complex)               # No projector linear term
+    s1 = np.zeros(2, dtype=complex)  # No projector linear term
     # Pdiags = np.zeros((2, 0), dtype=complex)    # No shared projector constraints
-    Projlist = []                                  # No shared projector constraints
+    Projlist = []  # No shared projector constraints
 
     # General constraint: ||x||^2 = 1
     B_j = [np.eye(2, dtype=complex)]
     s_2j = [np.zeros(2, dtype=complex)]
     c_2j = np.array([1.0])  # -x^T x + 1 = 0
 
+    n_dim = s0.shape[0]
+    Pstruct = sp.eye_array(n_dim, format="csc")  # dummy structure for empty projector set
+
     qcqp = DenseSharedProjQCQP(
-        A0, s0, c0, A1, s1, Projlist,
-        A2=None, B_j=B_j, s_2j=s_2j, c_2j=c_2j, verbose=0
+        A0, s0, c0, A1, s1, Projlist, Pstruct, A2=None, B_j=B_j, s_2j=s_2j, c_2j=c_2j, verbose=0
     )
 
     # Provide manual initial lag (one general constraint only)
@@ -536,15 +548,22 @@ def test_dense_qcqp_only_general_constraint():
     )
     assert np.linalg.norm(grad_opt) < 1e-3, "Gradient not (near) zero at optimum."
 
+
 def test_sparse_qcqp_with_nondiagonal_projectors():
     """Sparse QCQP with non-diagonal (Hermitian) projectors runs end-to-end."""
     n = 4
     # Non-diagonal Hermitian projectors: P = u u^H
-    u1 = (np.eye(n)[:, 0] + np.eye(n)[:, 1]) / np.sqrt(2)            # (e0 + e1)/sqrt(2)
-    u2 = (np.eye(n)[:, 2] + 1j * np.eye(n)[:, 3]) / np.sqrt(2)       # (e2 + i e3)/sqrt(2)
+    u1 = (np.eye(n)[:, 0] + np.eye(n)[:, 1]) / np.sqrt(2)  # (e0 + e1)/sqrt(2)
+    u2 = (np.eye(n)[:, 2] + 1j * np.eye(n)[:, 3]) / np.sqrt(2)  # (e2 + i e3)/sqrt(2)
     P1 = np.outer(u1, u1.conj())
     P2 = np.outer(u2, u2.conj())
     Projlist = [sp.csc_array(P1), sp.csc_array(P2)]
+
+    # Build Pstruct as union of projector sparsity patterns
+    Pstruct = (Projlist[0] != 0)
+    for P in Projlist[1:]:
+        Pstruct = Pstruct.maximum(P != 0)
+    Pstruct = sp.csc_array(Pstruct)
 
     # Simple PSD setup
     A0 = sp.eye_array(n, format="csc")
@@ -555,7 +574,7 @@ def test_sparse_qcqp_with_nondiagonal_projectors():
     s1 = rng.standard_normal(n) + 1j * rng.standard_normal(n)
     c0 = 0.0
 
-    qcqp = SparseSharedProjQCQP(A0, s0, c0, A1, A2, s1, Projlist, verbose=0)
+    qcqp = SparseSharedProjQCQP(A0, s0, c0, A1, A2, s1, Projlist, Pstruct, verbose=0)
 
     lags0 = qcqp.find_feasible_lags()
     dual, grad, _, _ = qcqp.get_dual(lags0, get_grad=True)
@@ -563,11 +582,14 @@ def test_sparse_qcqp_with_nondiagonal_projectors():
     assert grad.shape[0] == len(Projlist)
     assert np.all(np.isfinite(grad))
 
-    dual_opt, lags_opt, grad_opt, _, xstar = qcqp.solve_current_dual_problem("bfgs", init_lags=lags0)
+    dual_opt, lags_opt, grad_opt, _, xstar = qcqp.solve_current_dual_problem(
+        "bfgs", init_lags=lags0
+    )
     assert np.isfinite(dual_opt)
     assert lags_opt.shape[0] == len(Projlist)
     assert grad_opt is not None and grad_opt.shape[0] == len(Projlist)
     assert xstar.shape[0] == n
+
 
 def test_dense_qcqp_with_nondiagonal_projectors():
     """Dense QCQP with non-diagonal (Hermitian) projectors runs end-to-end."""
@@ -579,6 +601,12 @@ def test_dense_qcqp_with_nondiagonal_projectors():
     P2 = np.outer(u2, u2.conj())
     Projlist = [sp.csc_array(P1), sp.csc_array(P2)]
 
+    # Build Pstruct as union of projector sparsity patterns
+    Pstruct = (Projlist[0] != 0)
+    for P in Projlist[1:]:
+        Pstruct = Pstruct.maximum(P != 0)
+    Pstruct = sp.csc_array(Pstruct)
+
     A0 = np.eye(n, dtype=complex)
     A1 = np.eye(n, dtype=complex)
     rng = np.random.default_rng(1)
@@ -586,7 +614,7 @@ def test_dense_qcqp_with_nondiagonal_projectors():
     s1 = rng.standard_normal(n) + 1j * rng.standard_normal(n)
     c0 = 0.0
 
-    qcqp = DenseSharedProjQCQP(A0, s0, c0, A1, s1, Projlist, A2=None, verbose=0)
+    qcqp = DenseSharedProjQCQP(A0, s0, c0, A1, s1, Projlist, Pstruct, A2=None, verbose=0)
 
     lags0 = qcqp.find_feasible_lags()
     dual, grad, _, _ = qcqp.get_dual(lags0, get_grad=True)
@@ -594,7 +622,9 @@ def test_dense_qcqp_with_nondiagonal_projectors():
     assert grad.shape[0] == len(Projlist)
     assert np.all(np.isfinite(grad))
 
-    dual_opt, lags_opt, grad_opt, _, xstar = qcqp.solve_current_dual_problem("bfgs", init_lags=lags0)
+    dual_opt, lags_opt, grad_opt, _, xstar = qcqp.solve_current_dual_problem(
+        "bfgs", init_lags=lags0
+    )
     assert np.isfinite(dual_opt)
     assert lags_opt.shape[0] == len(Projlist)
     assert grad_opt is not None and grad_opt.shape[0] == len(Projlist)

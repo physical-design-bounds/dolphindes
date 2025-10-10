@@ -16,11 +16,6 @@ def _detect_all_diagonal(matrix_list: list[sp.csc_array]) -> bool:
     )
     
 
-# Add logic for diagonal and off-diagonal projectors
-# Replace qcqp with this class, test with diagonal projectors to make sure it has the same logic
-# Then add off-digonal projectors, make tests ensuring the off and on-diagonal projs get the same results
-# Allow off-diagonal projectors in QCQP and include a simple test
-
 class Projectors():
     """
     Class to handle sparse shared projectors.
@@ -29,12 +24,30 @@ class Projectors():
     ----------
     Plist : ArrayLike
         List of sparse projector matrices.
+    PStruct : sp.csc_array
+        Structure of the projectors (not used in this implementation).
+    force_general : bool, optional
+        If true, treat all projectors as general sparse matrices even if diagonal.
     """
 
-    def __init__(self, Plist: ArrayLike, force_general: bool = False) -> None:
+    def __init__(
+        self, 
+        Plist: ArrayLike, 
+        Pstruct: sp.csc_array, 
+        force_general: bool = False
+    ) -> None:
         self.Plist = []
+        Pm = sp.csc_array(Pstruct)
+        Pm = Pm.astype(float, copy=True)
+        Pm.data[:] = 1.0 
+        self.Pstruct = Pm
+
         for P in Plist:
-            self.Plist.append(sp.csc_array(P))
+            P = sp.csc_array(P)
+            if not self.validate_projector(P):
+                raise ValueError("One of the provided projectors is invalid.")
+            self.Plist.append(P)
+            
         # Validate shapes and store metadata for fast slicing
         if not self.Plist:
             # Allow empty projector list
@@ -43,6 +56,7 @@ class Projectors():
             self._is_diagonal = True  # vacuously true
             # Nothing else to build (no Pdiags/Pstack*)
             return
+
         n = self.Plist[0].shape[0]
         if any(P.shape != (n, n) for P in self.Plist):
             raise ValueError("All projectors must be square and have the same shape.")
@@ -57,6 +71,13 @@ class Projectors():
             self.PstackV = sp.vstack(self.Plist, format='csc')
             self.PstackV_dag = sp.vstack([P.conj().T for P in self.Plist], format='csc')
         del self.Plist  # We do not need the original list
+
+    def validate_projector(self, P: sp.csc_array) -> bool:
+        """Check if P is a valid projector (correct shape, subset of Pstruct)."""
+        if P.shape != self.Pstruct.shape:
+            return False
+        outside = (P != 0).multiply(self.Pstruct == 0)
+        return (outside.nnz == 0)
 
     def _getitem_diagonal(self, key: int) -> sp.csc_array:
         return sp.diags_array(self.Pdiags[:, key], format='csc')
