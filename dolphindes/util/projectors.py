@@ -127,7 +127,46 @@ class Projectors():
         if self._is_diagonal:
             self._setitem_diagonal(key, value)
         else:
-            self._setitem_sparse(key, value)
+            self._setitem_sparse(key, value)  
+
+    def erase_leading(self, m: int) -> None:
+        """
+        removes first m projection matrices.
+        """
+        
+        if self._is_diagonal:
+            self.Pdiags = self.Pdiags[:, m:]
+        else:
+            self.PstackV = self.PstackV[m*self._n:, :]
+            self.PstackV_dag = self.PstackV_dag[m*self._n:, :]
+        
+        self._k -= m
+        return
+    
+    def append(self, newP: sp.csc_array | ComplexArray) -> None:
+        """
+        append a new projector
+        """
+        if self._is_diagonal:
+            return self._append_diagonal(newP)
+        else:
+            return self._append_sparse(newP)
+    
+    def _append_diagonal(self, newP: ComplexArray) -> None:
+        self._k += 1
+        new_Pdiags = np.zeros((self._n, self._k), dtype=complex)
+        new_Pdiags[:,:self._k] = self.Pdiags
+        new_Pdiags[:,-1] = newP
+        self.Pdiags = new_Pdiags
+        return
+    
+    def _append_sparse(self, newP: sp.csc_array) -> None:
+        self._k += 1
+        if not self.validate_projector(newP):
+            raise ValueError("New projector inconsistent with sparsity structure.")
+        self.PstackV = sp.vstack((self.PstackV, newP), format='csc')
+        self.PstackV_dag = sp.vstack((self.PstackV_dag, newP.conj().T), format='csc')
+        return
 
     def allP_at_v(self, v: ComplexArray, dagger: bool = False) -> ComplexArray:
         """Compute all P_j @ v (or P_j^† @ v) and return an (n, k) matrix.
