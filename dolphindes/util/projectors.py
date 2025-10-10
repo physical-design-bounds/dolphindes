@@ -82,6 +82,9 @@ class Projectors():
         outside = Ptest + self.Pstruct - self.Pstruct
         return outside.nnz == 0
 
+    def __len__(self):
+        return self._k
+
     def _getitem_diagonal(self, key: int) -> sp.csc_array:
         return sp.diags_array(self.Pdiags[:, key], format='csc')
 
@@ -107,14 +110,19 @@ class Projectors():
         else:
             return self._getitem_sparse(key)
 
-    def _setitem_diagonal(self, key: int, values: ArrayLike) -> None:
-        self.Pdiags[:, key] = values
-
+    def _setitem_diagonal(self, key: int, value: ArrayLike) -> None:
+        try:
+            value = sp.csc_array(value)
+            self.Pdiags[:, key] = value.diagonal()
+        except ValueError:
+            # try again assuming that value is given as a 1D array
+            self.Pdiags[:, key] = value
+    
     def _setitem_sparse(self, key: int, value: ArrayLike) -> None:
         idx = key % self._k
         Pnew = sp.csc_array(value, dtype=self.PstackV.dtype)
-        if Pnew.shape != (self._n, self._n):
-            raise ValueError(f"New projector must have shape ({self._n}, {self._n}).")
+        if not self.validate_projector(Pnew):
+            raise ValueError("New projector inconsistent with sparsity structure.")
         r0 = idx * self._n
         r1 = (idx + 1) * self._n
         # Keep both stacks consistent (store P and its adjoint)
@@ -143,29 +151,34 @@ class Projectors():
         self._k -= m
         return
     
-    def append(self, newP: sp.csc_array | ComplexArray) -> None:
+    def append(self, Pnew: ArrayLike) -> None:
         """
         append a new projector
         """
         if self._is_diagonal:
-            return self._append_diagonal(newP)
+            return self._append_diagonal(Pnew)
         else:
-            return self._append_sparse(newP)
+            return self._append_sparse(Pnew)
     
-    def _append_diagonal(self, newP: ComplexArray) -> None:
+    def _append_diagonal(self, Pnew: ArrayLike) -> None:
         self._k += 1
         new_Pdiags = np.zeros((self._n, self._k), dtype=complex)
         new_Pdiags[:,:self._k] = self.Pdiags
-        new_Pdiags[:,-1] = newP
+        try:
+            new_Pdiags[:,-1] = Pnew.diagonal()
+        except ValueError:
+            # try again assuming that value is given as a 1D array
+            new_Pdiags[:,-1] = Pnew
         self.Pdiags = new_Pdiags
         return
     
-    def _append_sparse(self, newP: sp.csc_array) -> None:
+    def _append_sparse(self, Pnew: ArrayLike) -> None:
+        Pnew = sp.csc_array(Pnew)
         self._k += 1
-        if not self.validate_projector(newP):
+        if not self.validate_projector(Pnew):
             raise ValueError("New projector inconsistent with sparsity structure.")
-        self.PstackV = sp.vstack((self.PstackV, newP), format='csc')
-        self.PstackV_dag = sp.vstack((self.PstackV_dag, newP.conj().T), format='csc')
+        self.PstackV = sp.vstack((self.PstackV, Pnew), format='csc')
+        self.PstackV_dag = sp.vstack((self.PstackV_dag, Pnew.conj().T), format='csc')
         return
 
     def allP_at_v(self, v: ComplexArray, dagger: bool = False) -> ComplexArray:
