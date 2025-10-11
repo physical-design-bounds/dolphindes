@@ -181,6 +181,34 @@ class Projectors():
         self.PstackV_dag = sp.vstack((self.PstackV_dag, Pnew.conj().T), format='csc')
         return
 
+    def get_Pdata_column_stack(self) -> ComplexArray:
+        """Extract all sparse P_j entries according to Pstruct as columns of a (nnz,k) matrix.
+        
+        Returns a matrix whose j-th column is P_j[Pstruct]
+        """
+        if self._is_diagonal:
+            return self.Pdiags
+        
+        Pdata_stack = np.zeros((self.Pstruct.size, self._k), dtype=complex)
+        PstackV_col = np.zeros(self._n*self._k, dtype=complex)
+        nnz_count = 0
+        
+        for l in range(self._n):
+            PstackV_indices = self.PstackV.indices[self.PstackV.indptr[l]:self.PstackV.indptr[l+1]]
+            PstackV_data = self.PstackV.data[self.PstackV.indptr[l]:self.PstackV.indptr[l+1]]
+            PstackV_col[PstackV_indices] = PstackV_data
+            
+            col_nnz = self.Pstruct.indptr[l+1] - self.Pstruct.indptr[l]
+            
+            Pstruct_indices = self.Pstruct.indices[self.Pstruct.indptr[l]:self.Pstruct.indptr[l+1]]
+            Pdata_stack[nnz_count:nnz_count+col_nnz, :] = PstackV_col.reshape((self._n,self._k), order='F')[Pstruct_indices , :]
+            
+            # updates for processing next column
+            nnz_count += col_nnz
+            PstackV_col[PstackV_indices] = 0.0
+        
+        return Pdata_stack
+
     def allP_at_v(self, v: ComplexArray, dagger: bool = False) -> ComplexArray:
         """Compute all P_j @ v (or P_j^† @ v) and return an (n, k) matrix.
 
