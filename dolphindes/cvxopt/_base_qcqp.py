@@ -185,9 +185,12 @@ class _SharedProjQCQP(ABC):
         Precompute per-constraint symmetrized matrices and projector-source terms.
 
         Precomputes:
-          - precomputed_As[k] = Sym(A1 P_k A2) for each projector constraint k
-          - then appends Sym(A2^† B_j A2) for each general constraint j
-          - Fs[:, k] = A2^† P_k^† s1 for projector constraints (no general part)
+          - precomputed_As are the quadratic forms for x in the constraints
+            = Sym(A1 P_k A2) for each projector constraint k
+            = Sym(A2^† B_j A2) for each general constraint j
+          - Fs are the linear forms for x in the constraints
+            = A2^† P_k^† s1 for each projector constraint k
+            = A2^† s_2j for each general constraint j
 
         This speeds up repeated assembly of A(lags) and derivative-related
         operations when the number of constraints is moderate.
@@ -198,17 +201,20 @@ class _SharedProjQCQP(ABC):
             self.precomputed_As.append(Ak)
         for i in range(len(self.B_j)):
             self.precomputed_As.append(Sym(self.A2.conj().T @ self.B_j[i] @ self.A2))
-
+        
+        self.Fs = np.zeros((self.A2.shape[1], len(self.precomputed_As)), dtype=complex)
+        # For diagonal P: allP_at_v(self.s1, dagger=True) == (Pdiags.conj().T * s1).T
+        if self.n_proj_constr > 0:
+            Pv = self.Proj.allP_at_v(self.s1, dagger=True)  # shape (n, k)
+            self.Fs[:, :self.n_proj_constr] = self.A2.conj().T @ Pv  # shape (m, k)
+        if self.n_gen_constr > 0:
+            self.Fs[:, self.n_proj_constr:] = self.A2.conj().T @ np.column_stack(self.s_2j)
+        
         if self.verbose > 0:
             print(
                 f"Precomputed {self.n_proj_constr + self.n_gen_constr}"
-                " A matrices for the projectors."
+                " A matrices and Fs vectors."
             )
-
-        # (Fs)_k = A2^† P_k^† s1 for each k.
-        # For diagonal P: allP_at_v(self.s1, dagger=True) == (Pdiags.conj().T * s1).T
-        Pv = self.Proj.allP_at_v(self.s1, dagger=True)  # shape (n, k)
-        self.Fs = self.A2.conj().T @ Pv  # shape (m, k)
 
     def get_number_constraints(self) -> int:
         """Return total number of constraints (projector + general)."""
@@ -243,34 +249,39 @@ class _SharedProjQCQP(ABC):
         )
 
     def _get_total_S(
-        self, proj_lags: FloatNDArray, Blags: FloatNDArray
+        self, lags: FloatNDArray
     ) -> ComplexArray:
-        """Return S(lags) = s0 + A2^† (Σ_j λ_j P_j^† s1) + Σ_general μ_j (A2^† s_2j).
+        """Return S(lags), the linear form of x in the Lagrangian
+        = s0 + A2^† (Σ_j λ_j P_j^† s1) + Σ_general μ_j (A2^† s_2j).
 
         Parameters
         ----------
-        proj_lags : FloatNDArray
-            Lagrange multipliers for projector constraints (length = n_proj_constr).
-        Blags : FloatNDArray
-            Lagrange multipliers for general constraints (may be empty).
+        lags : FloatNDArray
+            Lagrange multipliers for all constraints (length = n_proj_constr + n_gen_constr).
 
         Returns
         -------
         ComplexArray
             The combined linear term S used in A x = S.
         """
-        # Σ λ_j P_j^† s1
-        y = self.Proj.weighted_sum_on_vector(self.s1, proj_lags, dagger=True)
-        S = cast(ComplexArray, self.s0 + self.A2.conj().T @ y)
-        # Could be optimized by precomputing A2^dagger s_2j
-        S += sum(
-            Blags[i] * (self.A2.conj().T @ self.s_2j[i]) for i in range(len(self.B_j))
-        )
+        if hasattr(self, 'Fs'):
+            S = self.s0 + self.Fs @ lags
+        else:
+            # Σ λ_j P_j^† s1
+            proj_lags = lags[:self.n_proj_constr]
+            y = self.Proj.weighted_sum_on_vector(self.s1, proj_lags, dagger=True)
+            S = cast(ComplexArray, self.s0 + self.A2.conj().T @ y)
+            Blags = lags[self.n_proj_constr:]
+            S += sum(
+                Blags[i] * (self.A2.conj().T @ self.s_2j[i]) for i in range(len(self.B_j))
+            )
+        
         return S
 
-    def _get_total_C(self, Blags: FloatNDArray) -> float:
+    def _get_total_C(self, lags: FloatNDArray) -> float:
         """Return Σ_general μ_j c_2j (0 if no general constraints)."""
-        return cast(float, np.sum(Blags * self.c_2j))
+        
+        return cast(float, np.sum(lags[self.n_proj_constr:] * self.c_2j))
 
     @abstractmethod
     def _update_Acho(self, A: sp.csc_array | ComplexArray) -> None:
@@ -403,9 +414,8 @@ class _SharedProjQCQP(ABC):
         xAx : float
             Value x*^† A x* (real scalar).
         """
-        Blags = lags[-self.n_gen_constr :] if self.n_gen_constr > 0 else np.array([])
         A = self._get_total_A(lags)
-        S = self._get_total_S(lags[: self.n_proj_constr], Blags)
+        S = self._get_total_S(lags)
         self._update_Acho(A)
         x_star: ComplexArray = self._Acho_solve(S)
         xAx: float = np.real(np.vdot(x_star, A @ x_star))
@@ -417,7 +427,7 @@ class _SharedProjQCQP(ABC):
         lags: FloatNDArray,
         get_grad: bool = False,
         get_hess: bool = False,
-        penalty_vectors: Optional[list[FloatNDArray]] = None,
+        penalty_vectors: Optional[list[ComplexArray]] = None,
     ) -> Tuple[float, Optional[FloatNDArray], Optional[FloatNDArray], Any]:
         """
         Evaluate dual function and optional derivatives at lags.
@@ -430,7 +440,7 @@ class _SharedProjQCQP(ABC):
             If True, compute gradient w.r.t. lags.
         get_hess : bool, default False
             If True, compute Hessian (only supported when no general constraints).
-        penalty_vectors : list[FloatNDArray] | None
+        penalty_vectors : list[ComplexArray] | None
             Optional PSD-boundary penalty vectors.
 
         Returns
@@ -440,16 +450,13 @@ class _SharedProjQCQP(ABC):
         grad : FloatNDArray | None
             Gradient (None if not requested).
         hess : FloatNDArray | None
-            Hessian (None if not requested / unsupported).
+            Hessian (None if not requested).
         dual_aux : namedtuple
             Auxiliary components (raw + penalty-separated parts).
 
         Notes
         -----
-        - Hessian currently unsupported with general constraints.
         - Penalty adjustment adds Σ_j v_j^† A^{-1} v_j and its derivatives.
-        - Potential shape issue if get_hess=True and general constraints present
-          (Fx + 2*Fs width mismatch) occurs before raising NotImplementedError.
         """
         if penalty_vectors is None:
             penalty_vectors = []
@@ -458,39 +465,29 @@ class _SharedProjQCQP(ABC):
         grad_penalty, hess_penalty = np.array([]), np.array([[]])
 
         xstar, dualval = self._get_xstar(lags)
-        Blags = lags[-self.n_gen_constr :] if self.n_gen_constr > 0 else np.array([])
-        dualval += self.c0 + self._get_total_C(Blags)
+        dualval += self.c0 + self._get_total_C(lags)
 
         if get_hess:
-            if not hasattr(self, "precomputed_As"):
-                raise AttributeError("precomputed_As needed for computing Hessian")
+            try:
+                # useful intermediate computations
+                # (Fx)_k = -A_k @ x_star
+                # where A_k is quadratic form of constraints
+    
+                Fx = np.zeros((len(xstar), len(self.precomputed_As)), dtype=complex)
+                for k, Ak in enumerate(self.precomputed_As):
+                    Fx[:, k] = -Ak @ xstar
+    
+                # get_hess implies get_grad also
+                grad = np.real(xstar.conj() @ (Fx + 2 * self.Fs))
+                grad[self.n_proj_constr:] += self.c_2j
+                
+                Ftot = Fx + self.Fs
+                hess = 2 * np.real(Ftot.conj().T @ self._Acho_solve(Ftot))
+            except AttributeError as err:
                 # this assumes that in the future we may consider making
                 # precomputed_As optional can also compute the Hessian without
                 # precomputed_As, leave for future implementation if useful
-
-            # useful intermediate computations
-            # (Fx)_k = -Sym(A_1 P_k A2) x_star = -A_k @ x_star
-
-            Fx = np.zeros((len(xstar), len(self.precomputed_As)), dtype=complex)
-            for k, Ak in enumerate(self.precomputed_As):
-                Fx[:, k] = -Ak @ xstar
-
-            # get_hess implies get_grad also
-            grad = np.real(xstar.conj() @ (Fx + 2 * self.Fs))
-
-            if self.n_gen_constr == 0:
-                Ftot = Fx + self.Fs
-                hess = 2 * np.real(Ftot.conj().T @ self._Acho_solve(Ftot))
-            else:
-                # TODO: implement Hessian with general constraints
-                # Because there may be cross terms beteween normal and general
-                # constraints, we need to compute it with a double for loop.
-                # Is there a way to compute the diagonal terms for the shared
-                # constraints faster? Then only compute cross terms + general
-                # diagonal components with a double for loop?
-                raise NotImplementedError(
-                    "Hessian computation with general constraints not implemented."
-                )
+                raise AttributeError("precomputed_As needed for computing Hessian")
 
         elif get_grad:
             # Generic projector gradient (works for diagonal and general P)
@@ -513,7 +510,7 @@ class _SharedProjQCQP(ABC):
             Py = self.Proj.allP_at_v(A2_xstar)  # (n, k)  columns: P_j y
 
             term1 = -np.real(u.conj() @ Py)  # (k,)
-            term2 = 2 * np.real(xstar.conj() @ self.Fs)  # (k,)
+            term2 = 2 * np.real(xstar.conj() @ self.Fs[:, :self.n_proj_constr])  # (k,)
             grad = term1 + term2
 
             if self.n_gen_constr > 0:
@@ -545,20 +542,16 @@ class _SharedProjQCQP(ABC):
                 # get_hess implies get_grad also
                 grad_penalty = np.zeros(grad.shape[0])
                 hess_penalty = np.zeros((grad.shape[0], grad.shape[0]))
-                if self.n_gen_constr == 0:
-                    Fv = np.zeros((penalty_matrix.shape[0], len(grad)), dtype=complex)
-                    for j in range(penalty_matrix.shape[1]):
-                        for k, Ak in enumerate(self.precomputed_As):
-                            # yes this is a double for loop, hessian for fake sources
-                            # is likely a speed bottleneck
-                            Fv[:, k] = Ak @ A_inv_penalty[:, j]
 
-                        grad_penalty += np.real(-A_inv_penalty[:, j].conj().T @ Fv)
-                        hess_penalty += 2 * np.real(Fv.conj().T @ self._Acho_solve(Fv))
-                else:
-                    raise NotImplementedError(
-                        "Hessian computation with general constraints not implemented."
-                    )
+                Fv = np.zeros((penalty_matrix.shape[0], len(grad)), dtype=complex)
+                for j in range(penalty_matrix.shape[1]):
+                    for k, Ak in enumerate(self.precomputed_As):
+                        # yes this is a double for loop, hessian for fake sources
+                        # is likely a speed bottleneck
+                        Fv[:, k] = Ak @ A_inv_penalty[:, j]
+
+                    grad_penalty += np.real(-A_inv_penalty[:, j].conj().T @ Fv)
+                    hess_penalty += 2 * np.real(Fv.conj().T @ self._Acho_solve(Fv))
 
             elif get_grad:
                 grad = cast(FloatNDArray, grad)
@@ -592,13 +585,14 @@ class _SharedProjQCQP(ABC):
 
         DualAux = namedtuple(
             "DualAux",
-            ["dualval_real", "dualgrad_real", "dualval_penalty", "grad_penalty"],
+            ["dualval_real", "dualgrad_real", "dualval_penalty", "grad_penalty", "hess_penalty"],
         )
         dual_aux = DualAux(
             dualval_real=dualval,
             dualgrad_real=grad,
             dualval_penalty=dualval_penalty,
             grad_penalty=grad_penalty,
+            hess_penalty=hess_penalty,
         )
 
         if len(penalty_vectors) > 0:

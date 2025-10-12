@@ -174,7 +174,7 @@ class TestQCQP:
         print("Testing totalS = known total S")
         ref_totals = np.load(data / "ldos_sparse_total_s.npy", allow_pickle=True)
         # Pass projector multipliers directly
-        calc_totals = sparse_ldos_qcqp._get_total_S(lags, np.array([]))
+        calc_totals = sparse_ldos_qcqp._get_total_S(lags)
         assert calc_totals.shape == ref_totals.shape, (
             "Shape of calculated total S does not match reference."
         )
@@ -337,7 +337,7 @@ class TestQCQP:
         print("Testing totalS = known total S")
         ref_totals = np.load(data / "ldos_dense_total_s.npy", allow_pickle=True)
         # Pass projector multipliers directly
-        calc_totals = dense_ldos_qcqp._get_total_S(lags, np.array([]))
+        calc_totals = dense_ldos_qcqp._get_total_S(lags)
         assert calc_totals.shape == ref_totals.shape, (
             "Shape of calculated total S does not match reference."
         )
