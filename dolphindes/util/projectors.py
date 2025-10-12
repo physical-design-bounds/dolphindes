@@ -41,7 +41,8 @@ class Projectors():
         Pm = Pm.astype(bool, copy=True)
         Pm.data[:] = True
         self.Pstruct = Pm
-
+        self._is_diagonal = _detect_all_diagonal([Pstruct]) and not force_general
+        
         for P in Plist:
             P = sp.csc_array(P)
             if not self.validate_projector(P):
@@ -53,7 +54,6 @@ class Projectors():
             # Allow empty projector list
             self._k = 0
             self._n = None
-            self._is_diagonal = _detect_all_diagonal([Pstruct])
             # Nothing else to build (no Pdiags/Pstack*)
             return
 
@@ -62,7 +62,6 @@ class Projectors():
             raise ValueError("All projectors must be square and have the same shape.")
         self._n = n
         self._k = len(self.Plist)
-        self._is_diagonal = _detect_all_diagonal(self.Plist) and not force_general
 
         if self._is_diagonal:
             self.Pdiags = np.column_stack([P.diagonal() for P in self.Plist])
@@ -190,6 +189,7 @@ class Projectors():
             return self.Pdiags
         
         Pdata_stack = np.zeros((self.Pstruct.size, self._k), dtype=complex)
+        print('Pdata_stack.shape', Pdata_stack.shape)
         PstackV_col = np.zeros(self._n*self._k, dtype=complex)
         nnz_count = 0
         
