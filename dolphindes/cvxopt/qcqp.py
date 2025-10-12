@@ -35,7 +35,7 @@ class SparseSharedProjQCQP(_SharedProjQCQP):
     where ALL quadratic matrices (A0, A1, A2, each projector block, and any B_j)
     are sparse. It supports:
       1. A family of "shared" (projection-structured) constraints defined through
-         diagonal projector matrices P_j whose diagonals are the columns of Pdiags.
+         sparse projector matrices with shared sparsity structure.
       2. An optional list of additional (general) quadratic equality constraints
          parameterized by matrices B_j, vectors s_2j, and scalars c_2j.
 
@@ -63,8 +63,8 @@ class SparseSharedProjQCQP(_SharedProjQCQP):
         Right quadratic factor used in both projector and general constraints.
     s1 : ArrayLike
         Linear term coupled with projector constraints.
-    Pdiags : ArrayLike
-        2D array whose columns are the diagonals of projector matrices P_j.
+    Plist : list[ArrayLike]
+        list of 2D arrays representing the projector matrices P_j.
     B_j : list[sp.csc_array] | None
         (Optional) list of general constraint middle matrices (between A2^† and A2).
     s_2j : list[ArrayLike] | None
@@ -86,8 +86,8 @@ class SparseSharedProjQCQP(_SharedProjQCQP):
         Objective constant.
     c_2j : FloatNDArray
         Real constants for general constraints (length matches B_j).
-    Pdiags : ComplexArray
-        Complex-valued projector diagonals stacked column-wise.
+    Proj : Projectors
+        dolphindes Projectors object representing all projector matrices P_j.
     n_gen_constr : int
         Number of general constraints (len(B_j)).
     precomputed_As : list[sp.csc_array]
@@ -238,8 +238,8 @@ class DenseSharedProjQCQP(_SharedProjQCQP):
         Left quadratic factor in projector constraints.
     s1 : ArrayLike
         Projector constraint linear term.
-    Pdiags : ArrayLike
-        Columns are diagonals of projector matrices P_j.
+    Plist : list[ArrayLike]
+        list of 2D arrays representing the projector matrices P_j.
     A2 : ArrayLike | None, default None
         Right quadratic factor (defaults to identity if None).
     verbose : int, default 0
@@ -258,7 +258,7 @@ class DenseSharedProjQCQP(_SharedProjQCQP):
         c0: float,
         A1: ArrayLike,
         s1: ArrayLike,
-        Pdiags: ArrayLike,
+        Plist: list[ArrayLike],
         Pstruct: ArrayLike | None = None,
         A2: ArrayLike | None = None,
         B_j: list[ArrayLike] | None = None,
@@ -276,7 +276,7 @@ class DenseSharedProjQCQP(_SharedProjQCQP):
             A1,
             A2,
             s1,
-            Pdiags,
+            Plist,
             Pstruct,
             B_j=B_j,
             s_2j=s_2j,

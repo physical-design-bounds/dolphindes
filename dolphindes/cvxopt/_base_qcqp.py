@@ -25,10 +25,9 @@ class _SharedProjQCQP(ABC):
         subject to   Re( - x^† A1 P_j A2 x + 2 x^† A2^† P_j^† s1 ) = 0
                      Re( - x^† A2^† B_j A2 x + 2 x^† A2^† s_2j + c_2j ) = 0
 
-    where each P_j is a (diagonal) projector represented only through its diagonal
-    entries (the columns of Pdiags). The matrices used internally for the shared
-    (projector) constraints are symmetrized via Sym(A1 P_j A2) to ensure Hermitian
-    structure.
+    where the P_j are projection matrices with shared sparsity structure.
+    The matrices used internally for the shared (projector) constraints are 
+    symmetrized via Sym(A1 P_j A2) to ensure Hermitian structure.
 
     Dual feasibility relies on the existence of (at least) one projector column
     such that A0 + λ A1 P_j A2 becomes positive semidefinite for sufficiently
@@ -95,7 +94,7 @@ class _SharedProjQCQP(ABC):
         A1: ArrayLike | sp.csc_array,
         A2: ArrayLike | sp.csc_array,
         s1: ArrayLike,
-        Plist: ArrayLike,
+        Plist: list[ArrayLike],
         Pstruct: ArrayLike | sp.csc_array | None = None,
         B_j: list[ArrayLike | sp.csc_array] | None = None,
         s_2j: list[ArrayLike] | None = None,
