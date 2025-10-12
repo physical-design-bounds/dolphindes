@@ -18,7 +18,7 @@ from dolphindes.cvxopt._base_qcqp import _SharedProjQCQP
 
 def merge_lead_constraints(QCQP: _SharedProjQCQP, merged_num: int = 2) -> None:
     """
-    Merge the first m constraints of QCQP into a single constraint.
+    Merge the first m shared projection constraints of QCQP into a single one.
     Also adjust the Lagrange multipliers so the dual value is the same.
 
     Parameters
@@ -34,15 +34,16 @@ def merge_lead_constraints(QCQP: _SharedProjQCQP, merged_num: int = 2) -> None:
         If merged_num < 2 or if there are insufficient constraints for merging.
     """
 
-    cstrt_num = len(QCQP.Proj)
+    proj_cstrt_num = len(QCQP.Proj)
     if merged_num < 2:
         raise ValueError("Need at least 2 constraints for merging.")
-    if cstrt_num < merged_num:
+    if proj_cstrt_num < merged_num:
         raise ValueError("Number of constraints insufficient for size of merge.")
 
     new_P = QCQP.Proj.Pstruct.astype(complex, copy=True)
     new_P.data[:] = 0.0
     for i in range(merged_num):
+        # keep in mind the sharedProj multipliers come first in current_lags
         new_P += QCQP.current_lags[i] * QCQP.Proj[i]
 
     Pnorm = la.norm(new_P.data)
@@ -71,6 +72,7 @@ def merge_lead_constraints(QCQP: _SharedProjQCQP, merged_num: int = 2) -> None:
 
     QCQP.current_lags = QCQP.current_lags[merged_num-1:]
     QCQP.current_lags[0] = Pnorm
+    QCQP.n_proj_constr = len(QCQP.Proj)
     
     QCQP.current_grad = QCQP.current_hess = (
         None  # in principle can merge dual derivatives but leave it undone for now
@@ -78,7 +80,7 @@ def merge_lead_constraints(QCQP: _SharedProjQCQP, merged_num: int = 2) -> None:
 
 
 def add_constraints(
-    QCQP: _SharedProjQCQP, added_Pdiag_list: list, orthonormalize: bool = True
+    QCQP: _SharedProjQCQP, added_Pdata_list: list, orthonormalize: bool = True
 ) -> None:
     """
     Method that adds new shared projection constraints into an existing QCQP.
@@ -87,59 +89,57 @@ def add_constraints(
     ----------
     QCQP : _SharedProjQCQP
         QCQP for which the new constraints are added in.
-    added_Pdiag_list : list
-        List of 1d numpy arrays that are the new constraints to be added in.
+    added_Pdata_list : list
+        List of 1d numpy arrays representing the sparse entries of
+        the new constraints to be added in, with sparsity structure QCQP.Proj.Pstruct
     orthonormalize : bool, optional
-        If true, assume that QCQP has orthonormal constraints and keeps it that way.
+        If true, assume that QCQP has orthonormal constraints and keeps it that way
     """
-    x_size, cstrt_num = QCQP.Pdiags.shape
-    added_Pdiag_num = len(added_Pdiag_list)
+    x_size = QCQP.Proj.Pstruct.size
+    proj_cstrt_num = QCQP.n_proj_constr
+    added_Pdata_num = len(added_Pdata_list)
 
     if QCQP.current_lags is not None:
-        new_lags = np.zeros(cstrt_num + added_Pdiag_num, dtype=float)
-        new_lags[:cstrt_num] = QCQP.current_lags
-    else:
-        new_lags = None
+        new_lags = np.zeros(proj_cstrt_num + added_Pdata_num + QCQP.n_gen_constr, dtype=float)
+        new_lags[:proj_cstrt_num] = QCQP.current_lags[:proj_cstrt_num]
+        new_lags[-QCQP.n_gen_constr:] = QCQP.current_lags[-QCQP.n_gen_constr:]
+        QCQP.current_lags = new_lags
 
-    new_Pdiags = np.zeros((x_size, cstrt_num + added_Pdiag_num), dtype=complex)
-    new_Pdiags[:, :cstrt_num] = QCQP.Pdiags
-    if not orthonormalize:
-        for m, added_Pdiag in enumerate(added_Pdiag_list):
-            new_Pdiags[:, cstrt_num + m] = added_Pdiag
-
-    else:
-        for m, added_Pdiag in enumerate(added_Pdiag_list):
-            # do Gram-Schmidt orthogonalization for each added Pdiag
-            for j in range(cstrt_num + m):
-                added_Pdiag -= CRdot(new_Pdiags[:, j], added_Pdiag) * new_Pdiags[:, j]
-            added_Pdiag /= la.norm(added_Pdiag)
-
-            new_Pdiags[:, cstrt_num + m] = added_Pdiag
+    if orthonormalize:
+        # in this case assume that existing Pdata is already orthonormalized
+        new_Pdata = np.zeros((x_size, proj_cstrt_num + added_Pdata_num), dtype=complex)
+        new_Pdata[:, :proj_cstrt_num] = QCQP.Proj.get_Pdata_column_stack()
+        
+        for m in range(added_Pdata_num):
+            # do (modified) Gram-Schmidt orthogonalization for each added Pdata
+            for j in range(proj_cstrt_num + m):
+                added_Pdata_list[m] -= CRdot(new_Pdata[:, j], added_Pdata_list[m]) * new_Pdata[:, j]
+            added_Pdata_list[m] /= la.norm(added_Pdata_list[m])
+            
+            new_Pdata[:, proj_cstrt_num + m] = added_Pdata_list[m]
 
     # update QCQP
-    if hasattr(QCQP, "precomputed_As"):
-        # updated precomputed_As
-        for added_Pdiag in added_Pdiag_list:
-            QCQP.precomputed_As.append(
-                Sym(QCQP.A1 @ sp.diags_array(added_Pdiag, format="csr") @ QCQP.A2)
+    for m, added_Pdata in enumerate(added_Pdata_list):
+        Pnew = QCQP.Proj.Pstruct.astype(complex, copy=True)
+        Pnew.data = added_Pdata
+        QCQP.Proj.append(Pnew)
+
+        if hasattr(QCQP, "precomputed_As"):
+            # updated precomputed_As
+            QCQP.precomputed_As.insert(QCQP.n_proj_constr + m,
+                Sym(QCQP.A1 @ Pnew @ QCQP.A2)
             )
 
     if hasattr(QCQP, "Fs"):
-        new_Fs = np.zeros((x_size, cstrt_num + added_Pdiag_num), dtype=complex)
-        new_Fs[:, :cstrt_num] = QCQP.Fs
-        new_Fs[:, cstrt_num:] = (
-            QCQP.A2.conj().T @ (new_Pdiags[:, cstrt_num:].conj().T * QCQP.s1).T
-        )
-        QCQP.Fs = new_Fs
+        QCQP.Fs = QCQP.A2.conj().T @ QCQP.Proj.allP_at_v(QCQP.s1, dagger=True)
 
-    QCQP.Pdiags = new_Pdiags
-    QCQP.current_lags = new_lags
+    QCQP.n_proj_constr = len(QCQP.Proj)
     QCQP.current_grad = QCQP.current_hess = None
 
 
 def run_gcd(
     QCQP: _SharedProjQCQP,
-    max_cstrt_num: int = 10,
+    max_proj_cstrt_num: int = 10,
     orthonormalize: bool = True,
     opt_params=None,
     max_gcd_iter_num=50,
@@ -156,9 +156,9 @@ def run_gcd(
     Lagrangian quadratic form eigenvalue is large, to help the dual optimization
     navigate the semi-definite boundary
 
-    If the total number of constraints is larger than max_gcd_cstrt_num combine
+    If the total number of constraints is larger than max_gcd_proj_cstrt_num combine
     the earlier constraints to keep the total number of constraints fixed. Setting
-    max_cstrt_num large enough will eventually result in evaluating the dual bound
+    max_proj_cstrt_num large enough will eventually result in evaluating the dual bound
     with all possible constraints, which gives the tightest bound but may be extremely
     expensive. The goal of GCD is to approximate this tightest bound with greatly reduced
     computational cost.
@@ -167,8 +167,8 @@ def run_gcd(
     ----------
     QCQP : _SharedProjQCQP
         The SharedProjQCQP for which we compute and refine dual bounds.
-    max_cstrt_num : int, optional
-        The maximum constraint number for QCQP. The default is 10.
+    max_proj_cstrt_num : int, optional
+        The maximum projection constraint number for QCQP. The default is 10.
     orthonormalize : bool, optional
         Whether or not to orthonormalize the constraint projectors. The default is True.
     opt_params : dict, optional
@@ -195,8 +195,8 @@ def run_gcd(
     if orthonormalize:
         # orthonormalize QCQP
         # informally checked for correctness
-        x_size, cstrt_num = QCQP.Pdiags.shape
-        realext_Pdiags = np.zeros((2 * x_size, cstrt_num), dtype=float)
+        x_size, proj_cstrt_num = QCQP.Pdiags.shape
+        realext_Pdiags = np.zeros((2 * x_size, proj_cstrt_num), dtype=float)
         realext_Pdiags[:x_size, :] = np.real(QCQP.Pdiags)
         realext_Pdiags[x_size:, :] = np.imag(QCQP.Pdiags)
         realext_Pdiags_Q, realext_Pdiags_R = la.qr(realext_Pdiags, mode="economic")
@@ -239,11 +239,11 @@ def run_gcd(
         # informally checked that minAeigw increases when increasing multiplier of minAeig_Pdiag
 
         ## add new constraints
-        QCQP.add_constraints([maxViol_Pdiag, minAeig_Pdiag])
+        QCQP.add_constraints([maxViol_Pdiag, minAeig_Pdiag], orthonormalize=orthonormalize)
         # informally checked that new constraints are added in orthonormal fashion
 
         ## merge old constraints if necessary
-        if QCQP.Pdiags.shape[1] > max_cstrt_num:
+        if QCQP.Pdiags.shape[1] > max_proj_cstrt_num:
             QCQP.merge_lead_constraints(
-                merged_num=QCQP.Pdiags.shape[1] - max_cstrt_num + 1
+                merged_num=QCQP.Pdiags.shape[1] - max_proj_cstrt_num + 1
             )

@@ -161,8 +161,7 @@ class Projectors():
             return self._append_sparse(Pnew)
     
     def _append_diagonal(self, Pnew: ArrayLike) -> None:
-        self._k += 1
-        new_Pdiags = np.zeros((self._n, self._k), dtype=complex)
+        new_Pdiags = np.zeros((self._n, self._k+1), dtype=complex)
         new_Pdiags[:,:self._k] = self.Pdiags
         try:
             new_Pdiags[:,-1] = Pnew.diagonal()
@@ -170,6 +169,7 @@ class Projectors():
             # try again assuming that value is given as a 1D array
             new_Pdiags[:,-1] = Pnew
         self.Pdiags = new_Pdiags
+        self._k += 1
         return
     
     def _append_sparse(self, Pnew: ArrayLike) -> None:

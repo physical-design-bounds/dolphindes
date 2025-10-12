@@ -157,7 +157,7 @@ class _SharedProjQCQP(ABC):
         Pstruct = sp.csc_array(Pstruct)
 
         self.Proj = Projectors(Plist, Pstruct)
-        self.n_proj_constr = len(np.asarray(Plist, dtype=object))
+        self.n_proj_constr = len(self.Proj)
         self.n_gen_constr = len(self.B_j)
 
         assert len(self.c_2j) == len(self.s_2j), (
@@ -706,20 +706,11 @@ class _SharedProjQCQP(ABC):
         ----------
         merged_num : int, default 2
             Number of leading projector constraints to merge.
-
-        Raises
-        ------
-        NotImplementedError
-            If general constraints are present.
         """
-        if self.n_gen_constr > 0:
-            raise NotImplementedError(
-                "Merging constraints not implemented for general constraints."
-            )
         gcd.merge_lead_constraints(self, merged_num=merged_num)
 
     def add_constraints(
-        self, added_Pdiag_list: list[ComplexArray], orthonormalize: bool = True
+        self, added_Pdata_list: list[ComplexArray], orthonormalize: bool = True
     ) -> None:
         """
         Append additional projector constraints.
@@ -730,18 +721,9 @@ class _SharedProjQCQP(ABC):
             List of new projector diagonals.
         orthonormalize : bool, default True
             Whether to orthonormalize constraint set after insertion.
-
-        Raises
-        ------
-        NotImplementedError
-            If general constraints are present.
         """
-        if self.n_gen_constr > 0:
-            raise NotImplementedError(
-                "Adding constraints not implemented for QCQPs with general constraints."
-            )
         gcd.add_constraints(
-            self, added_Pdiag_list=added_Pdiag_list, orthonormalize=orthonormalize
+            self, added_Pdata_list=added_Pdata_list, orthonormalize=orthonormalize
         )
 
     def run_gcd(
