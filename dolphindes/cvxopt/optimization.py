@@ -678,13 +678,19 @@ class Alt_Newton_GD(_Optimizer):
 
                 # find step for next iteration
                 if doN:
-                    Ndir = np.linalg.solve(self.xhess, -self.xgrad)
-                    xdir = Ndir / np.linalg.norm(Ndir)
-                    last_step_size = last_N_step_size
-                    if self.verbose >= 2:
-                        print("doing Newton step")
-                        # print("xdir dot xgrad is", np.dot(xdir, self.xgrad))
-                else:
+                    try:
+                        Ndir = np.linalg.solve(self.xhess, -self.xgrad)
+                        xdir = Ndir / np.linalg.norm(Ndir)
+                        last_step_size = last_N_step_size
+                        if self.verbose >= 2:
+                            print("doing Newton step")
+                            # print("xdir dot xgrad is", np.dot(xdir, self.xgrad))
+                    except np.linalg.LinAlgError:
+                        doN = 0
+                        if self.verbose >= 2:
+                            print("Hessian is singular")
+
+                if not doN:
                     if self.verbose >= 2:
                         print("doing GD step")
                     xdir = -self.xgrad / np.linalg.norm(self.xgrad)
