@@ -8,7 +8,7 @@ import scipy.sparse.linalg as spla
 from numpy.typing import ArrayLike
 
 from dolphindes.cvxopt import gcd
-from dolphindes.types import ComplexArray, FloatNDArray
+from dolphindes.types import ComplexArray, FloatNDArray, SparseDense
 from dolphindes.util import Projectors, Sym
 
 from .optimization import BFGS, Alt_Newton_GD, _Optimizer
@@ -91,9 +91,9 @@ class _SharedProjQCQP(ABC):
         A1: ArrayLike | sp.csc_array,
         A2: ArrayLike | sp.csc_array,
         s1: ArrayLike,
-        Plist: list[ArrayLike],
-        Pstruct: ArrayLike | sp.csc_array | None = None,
-        B_j: list[ArrayLike | sp.csc_array] | None = None,
+        Plist: list[SparseDense],
+        Pstruct: SparseDense | None = None,
+        B_j: list[SparseDense] | None = None,
         s_2j: list[ArrayLike] | None = None,
         c_2j: ArrayLike | None = None,
         verbose: int = 0,
@@ -148,7 +148,8 @@ class _SharedProjQCQP(ABC):
             # capture Pstruct as the superset of all sparsity structures in Plist
             Pstruct = Plist[0].copy()
             for P in Plist:
-                Pstruct += np.random.rand() * P
+                # No chance of adding to zero pattern, so add small offset
+                Pstruct += (np.random.rand() + 0.01) * P
 
         Pstruct = sp.csc_array(Pstruct)
 
@@ -247,8 +248,9 @@ class _SharedProjQCQP(ABC):
         )
 
     def _get_total_S(self, lags: FloatNDArray) -> ComplexArray:
-        """Return S(lags), the linear form of x in the Lagrangian
-        = s0 + A2^† (Σ_j λ_j P_j^† s1) + Σ_general μ_j (A2^† s_2j).
+        """Return S(lags), the linear form of x in the Lagrangian.
+
+        S = s0 + A2^† (Σ_j λ_j P_j^† s1) + Σ_general μ_j (A2^† s_2j).
 
         Parameters
         ----------
@@ -277,7 +279,6 @@ class _SharedProjQCQP(ABC):
 
     def _get_total_C(self, lags: FloatNDArray) -> float:
         """Return Σ_general μ_j c_2j (0 if no general constraints)."""
-
         return cast(float, np.sum(lags[self.n_proj_constr :] * self.c_2j))
 
     @abstractmethod
@@ -480,7 +481,7 @@ class _SharedProjQCQP(ABC):
 
                 Ftot = Fx + self.Fs
                 hess = 2 * np.real(Ftot.conj().T @ self._Acho_solve(Ftot))
-            except AttributeError as err:
+            except AttributeError:
                 # this assumes that in the future we may consider making
                 # precomputed_As optional can also compute the Hessian without
                 # precomputed_As, leave for future implementation if useful
