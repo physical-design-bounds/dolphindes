@@ -1,19 +1,12 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""
-Created on Fri Oct 10 13:36:29 2025
+"""Unit tests for utility functions in dolphindes.util."""
 
-@author: pengning
-"""
-
-import pytest
 import numpy as np
 import scipy.sparse as sp
+
 from dolphindes.util import Projectors
 
 
 def test_Projectors():
-    
     ## test validate_projector
     struct = sp.csc_array([[0,1,0],
                            [0,0,1],
