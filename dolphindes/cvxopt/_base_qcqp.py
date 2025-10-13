@@ -81,9 +81,6 @@ class _SharedProjQCQP(ABC):
     -----
     - General (B_j) constraints are appended after projector constraints in
       precomputed_As order.
-    - Hessian computation is only implemented when there are NO general
-      constraints (n_gen_constr == 0); requesting it otherwise raises
-      NotImplementedError.
     """
 
     def __init__(
