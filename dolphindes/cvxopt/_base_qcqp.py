@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from collections import namedtuple
-from typing import Any, Optional, Tuple, cast, Iterator
+from typing import Any, Iterator, Optional, Tuple, cast
 
 import numpy as np
 import scipy.sparse as sp
@@ -26,7 +26,7 @@ class _SharedProjQCQP(ABC):
                      Re( - x^† A2^† B_j A2 x + 2 x^† A2^† s_2j + c_2j ) = 0
 
     where the P_j are projection matrices with shared sparsity structure.
-    The matrices used internally for the shared (projector) constraints are 
+    The matrices used internally for the shared (projector) constraints are
     symmetrized via Sym(A1 P_j A2) to ensure Hermitian structure.
 
     Dual feasibility relies on the existence of (at least) one projector column
@@ -145,7 +145,7 @@ class _SharedProjQCQP(ABC):
             self.c_2j = np.asarray(c_2j, dtype=float)
 
         if Pstruct is None:
-            # capture Pstruct as the superset of all sparsity structures in Plist 
+            # capture Pstruct as the superset of all sparsity structures in Plist
             Pstruct = Plist[0].copy()
             for P in Plist:
                 Pstruct += np.random.rand() * P
@@ -197,15 +197,17 @@ class _SharedProjQCQP(ABC):
             self.precomputed_As.append(Ak)
         for i in range(len(self.B_j)):
             self.precomputed_As.append(Sym(self.A2.conj().T @ self.B_j[i] @ self.A2))
-        
+
         self.Fs = np.zeros((self.A2.shape[1], len(self.precomputed_As)), dtype=complex)
         # For diagonal P: allP_at_v(self.s1, dagger=True) == (Pdiags.conj().T * s1).T
         if self.n_proj_constr > 0:
             Pv = self.Proj.allP_at_v(self.s1, dagger=True)  # shape (n, k)
-            self.Fs[:, :self.n_proj_constr] = self.A2.conj().T @ Pv  # shape (m, k)
+            self.Fs[:, : self.n_proj_constr] = self.A2.conj().T @ Pv  # shape (m, k)
         if self.n_gen_constr > 0:
-            self.Fs[:, self.n_proj_constr:] = self.A2.conj().T @ np.column_stack(self.s_2j)
-        
+            self.Fs[:, self.n_proj_constr :] = self.A2.conj().T @ np.column_stack(
+                self.s_2j
+            )
+
         if self.verbose > 0:
             print(
                 f"Precomputed {self.n_proj_constr + self.n_gen_constr}"
@@ -244,9 +246,7 @@ class _SharedProjQCQP(ABC):
             "_get_total_A_noprecomp not implemented; use precomputation."
         )
 
-    def _get_total_S(
-        self, lags: FloatNDArray
-    ) -> ComplexArray:
+    def _get_total_S(self, lags: FloatNDArray) -> ComplexArray:
         """Return S(lags), the linear form of x in the Lagrangian
         = s0 + A2^† (Σ_j λ_j P_j^† s1) + Σ_general μ_j (A2^† s_2j).
 
@@ -260,24 +260,25 @@ class _SharedProjQCQP(ABC):
         ComplexArray
             The combined linear term S used in A x = S.
         """
-        if hasattr(self, 'Fs'):
+        if hasattr(self, "Fs"):
             S = self.s0 + self.Fs @ lags
         else:
             # Σ λ_j P_j^† s1
-            proj_lags = lags[:self.n_proj_constr]
+            proj_lags = lags[: self.n_proj_constr]
             y = self.Proj.weighted_sum_on_vector(self.s1, proj_lags, dagger=True)
             S = cast(ComplexArray, self.s0 + self.A2.conj().T @ y)
-            Blags = lags[self.n_proj_constr:]
+            Blags = lags[self.n_proj_constr :]
             S += sum(
-                Blags[i] * (self.A2.conj().T @ self.s_2j[i]) for i in range(len(self.B_j))
+                Blags[i] * (self.A2.conj().T @ self.s_2j[i])
+                for i in range(len(self.B_j))
             )
-        
+
         return S
 
     def _get_total_C(self, lags: FloatNDArray) -> float:
         """Return Σ_general μ_j c_2j (0 if no general constraints)."""
-        
-        return cast(float, np.sum(lags[self.n_proj_constr:] * self.c_2j))
+
+        return cast(float, np.sum(lags[self.n_proj_constr :] * self.c_2j))
 
     @abstractmethod
     def _update_Acho(self, A: sp.csc_array | ComplexArray) -> None:
@@ -468,15 +469,15 @@ class _SharedProjQCQP(ABC):
                 # useful intermediate computations
                 # (Fx)_k = -A_k @ x_star
                 # where A_k is quadratic form of constraints
-    
+
                 Fx = np.zeros((len(xstar), len(self.precomputed_As)), dtype=complex)
                 for k, Ak in enumerate(self.precomputed_As):
                     Fx[:, k] = -Ak @ xstar
-    
+
                 # get_hess implies get_grad also
                 grad = np.real(xstar.conj() @ (Fx + 2 * self.Fs))
-                grad[self.n_proj_constr:] += self.c_2j
-                
+                grad[self.n_proj_constr :] += self.c_2j
+
                 Ftot = Fx + self.Fs
                 hess = 2 * np.real(Ftot.conj().T @ self._Acho_solve(Ftot))
             except AttributeError as err:
@@ -506,7 +507,7 @@ class _SharedProjQCQP(ABC):
             Py = self.Proj.allP_at_v(A2_xstar)  # (n, k)  columns: P_j y
 
             term1 = -np.real(u.conj() @ Py)  # (k,)
-            term2 = 2 * np.real(xstar.conj() @ self.Fs[:, :self.n_proj_constr])  # (k,)
+            term2 = 2 * np.real(xstar.conj() @ self.Fs[:, : self.n_proj_constr])  # (k,)
             grad = term1 + term2
 
             if self.n_gen_constr > 0:
@@ -581,7 +582,13 @@ class _SharedProjQCQP(ABC):
 
         DualAux = namedtuple(
             "DualAux",
-            ["dualval_real", "dualgrad_real", "dualval_penalty", "grad_penalty", "hess_penalty"],
+            [
+                "dualval_real",
+                "dualgrad_real",
+                "dualval_penalty",
+                "grad_penalty",
+                "hess_penalty",
+            ],
         )
         dual_aux = DualAux(
             dualval_real=dualval,
