@@ -146,12 +146,21 @@ class _SharedProjQCQP(ABC):
 
         if Pstruct is None:
             # capture Pstruct as the superset of all sparsity structures in Plist
-            Pstruct = Plist[0].copy()
+            # Ensure complex dtype by default
+            P0 = Plist[0]
+            Pstruct = (
+                P0.astype(complex).copy() if sp.issparse(P0) 
+                else np.asarray(P0, dtype=complex).copy()
+            )
             for P in Plist:
-                # No chance of adding to zero pattern, so add small offset
-                Pstruct += (np.random.rand() + 0.01) * P
+                # Use complex scalar to guarantee complex promotion
+                coef = (np.random.rand() + 0.01) + 0j
+                Pcomplex = (P.astype(complex) if sp.issparse(P) 
+                            else np.asarray(P, dtype=complex))  
+                Pstruct += coef * Pcomplex
 
-        Pstruct = sp.csc_array(Pstruct)
+        # Ensure complex dtype when converting to CSC
+        Pstruct = sp.csc_array(Pstruct, dtype=complex)
 
         self.Proj = Projectors(Plist, Pstruct)
         self.n_proj_constr = len(self.Proj)
@@ -199,7 +208,8 @@ class _SharedProjQCQP(ABC):
         for i in range(len(self.B_j)):
             self.precomputed_As.append(Sym(self.A2.conj().T @ self.B_j[i] @ self.A2))
 
-        self.Fs = np.zeros((self.A2.shape[1], len(self.precomputed_As)), dtype=complex)
+        self.Fs: ComplexArray = np.zeros((self.A2.shape[1], 
+                                          len(self.precomputed_As)), dtype=complex)
         # For diagonal P: allP_at_v(self.s1, dagger=True) == (Pdiags.conj().T * s1).T
         if self.n_proj_constr > 0:
             Pv = self.Proj.allP_at_v(self.s1, dagger=True)  # shape (n, k)
@@ -255,20 +265,22 @@ class _SharedProjQCQP(ABC):
         Parameters
         ----------
         lags : FloatNDArray
-            Lagrange multipliers for all constraints (length = n_proj_constr + n_gen_constr).
+            Lagrange multipliers for all constraints
+            (length = n_proj_constr + n_gen_constr).
 
         Returns
         -------
         ComplexArray
             The combined linear term S used in A x = S.
         """
+        S: ComplexArray
         if hasattr(self, "Fs"):
             S = self.s0 + self.Fs @ lags
         else:
             # Σ λ_j P_j^† s1
             proj_lags = lags[: self.n_proj_constr]
             y = self.Proj.weighted_sum_on_vector(self.s1, proj_lags, dagger=True)
-            S = cast(ComplexArray, self.s0 + self.A2.conj().T @ y)
+            S = self.s0 + self.A2.conj().T @ y
             Blags = lags[self.n_proj_constr :]
             S += sum(
                 Blags[i] * (self.A2.conj().T @ self.s_2j[i])
