@@ -24,8 +24,8 @@ class Projectors():
     ----------
     Plist : ArrayLike
         List of sparse projector matrices.
-    Pstruct : sp.csc_array
-        Structure of the projectors (not used in this implementation).
+    Pstruct : sp.csr_array
+        Sparsity structure of the projectors.
     force_general : bool, optional
         If true, treat all projectors as general sparse matrices even if diagonal.
     """
@@ -33,18 +33,18 @@ class Projectors():
     def __init__(
         self, 
         Plist: ArrayLike, 
-        Pstruct: sp.csc_array, 
+        Pstruct: sp.csr_array, 
         force_general: bool = False
     ) -> None:
         self.Plist = []
-        Pm = sp.csc_array(Pstruct)
+        Pm = sp.csr_array(Pstruct)
         Pm = Pm.astype(bool, copy=True)
         Pm.data[:] = True
         self.Pstruct = Pm
         self._is_diagonal = _detect_all_diagonal([Pstruct]) and not force_general
         
         for P in Plist:
-            P = sp.csc_array(P)
+            P = sp.csr_array(P)
             if not self.validate_projector(P):
                 raise ValueError("One of the provided projectors is invalid.")
             self.Plist.append(P)
@@ -66,12 +66,13 @@ class Projectors():
         if self._is_diagonal:
             self.Pdiags = np.column_stack([P.diagonal() for P in self.Plist])
         else:
-            # Build vertical stacks for both P and P^† to avoid runtime transposes
-            self.PstackV = sp.vstack(self.Plist, format='csc')
-            self.PstackV_dag = sp.vstack([P.conj().T for P in self.Plist], format='csc')
+            # Build vertical and horizontal stacks for P to avoid runtime transposes
+            # the csr vs csc specifications chosen for convenience in converting to / from Pdata representation
+            self.PstackV = sp.vstack(self.Plist, format='csr')
+            self.PstackH = sp.hstack(self.Plist, format='csc')
         del self.Plist  # We do not need the original list
 
-    def validate_projector(self, P: sp.csc_array) -> bool:
+    def validate_projector(self, P: sp.csr_array) -> bool:
         """Check if P is a valid projector (correct shape, subset of Pstruct)."""
         if P.shape != self.Pstruct.shape:
             return False
@@ -84,17 +85,17 @@ class Projectors():
     def __len__(self):
         return self._k
 
-    def _getitem_diagonal(self, key: int) -> sp.csc_array:
-        return sp.diags_array(self.Pdiags[:, key], format='csc')
+    def _getitem_diagonal(self, key: int) -> sp.csr_array:
+        return sp.diags_array(self.Pdiags[:, key], format='csr')
 
-    def _getitem_sparse(self, key: int) -> sp.csc_array:
+    def _getitem_sparse(self, key: int) -> sp.csr_array:
         idx = key % self._k
         r0 = idx * self._n
         r1 = (idx + 1) * self._n
         # Extract block-rows corresponding to P[idx]
         return self.PstackV[r0:r1, :]
 
-    def __getitem__(self, key: int) -> sp.csc_array:
+    def __getitem__(self, key: int) -> sp.csr_array:
         """Return the key-th projector.
         
         If projectors are diagonal, return a CSC diag matrix from Pdiags.
@@ -111,7 +112,7 @@ class Projectors():
 
     def _setitem_diagonal(self, key: int, value: ArrayLike) -> None:
         try:
-            value = sp.csc_array(value)
+            value = sp.csr_array(value)
             self.Pdiags[:, key] = value.diagonal()
         except ValueError:
             # try again assuming that value is given as a 1D array
@@ -119,14 +120,14 @@ class Projectors():
     
     def _setitem_sparse(self, key: int, value: ArrayLike) -> None:
         idx = key % self._k
-        Pnew = sp.csc_array(value, dtype=self.PstackV.dtype)
+        Pnew = sp.csr_array(value, dtype=self.PstackV.dtype)
         if not self.validate_projector(Pnew):
             raise ValueError("New projector inconsistent with sparsity structure.")
         r0 = idx * self._n
         r1 = (idx + 1) * self._n
         # Keep both stacks consistent (store P and its adjoint)
         self.PstackV[r0:r1, :] = Pnew
-        self.PstackV_dag[r0:r1, :] = Pnew.conj().T
+        self.PstackH[:, r0:r1] = Pnew.tocsc() # check if removing is fine
 
     def __setitem__(self, key: int, value: ArrayLike) -> None:
         if not isinstance(key, int):
@@ -145,7 +146,7 @@ class Projectors():
             self.Pdiags = self.Pdiags[:, m:]
         else:
             self.PstackV = self.PstackV[m*self._n:, :]
-            self.PstackV_dag = self.PstackV_dag[m*self._n:, :]
+            self.PstackH = self.PstackH[:, m*self._n:]
         
         self._k -= m
         return
@@ -172,42 +173,48 @@ class Projectors():
         return
     
     def _append_sparse(self, Pnew: ArrayLike) -> None:
-        Pnew = sp.csc_array(Pnew)
+        Pnew = sp.csr_array(Pnew)
         self._k += 1
         if not self.validate_projector(Pnew):
             raise ValueError("New projector inconsistent with sparsity structure.")
-        self.PstackV = sp.vstack((self.PstackV, Pnew), format='csc')
-        self.PstackV_dag = sp.vstack((self.PstackV_dag, Pnew.conj().T), format='csc')
+        self.PstackV = sp.vstack((self.PstackV, Pnew), format='csr')
+        self.PstackH = sp.hstack((self.PstackH, Pnew.tocsc()), format='csc')
         return
 
     def get_Pdata_column_stack(self) -> ComplexArray:
-        """Extract all sparse P_j entries according to Pstruct as columns of a (nnz,k) matrix.
+        """Extract all sparse P_j entries according to Pstruct ordering as columns of a (nnz,k) matrix.
         
         Returns a matrix whose j-th column is P_j[Pstruct]
         """
         if self._is_diagonal:
-            return self.Pdiags
+            return self.Pdiags[self.Pstruct.indices, :]
         
-        Pdata_stack = np.zeros((self.Pstruct.size, self._k), dtype=complex)
-        print('Pdata_stack.shape', Pdata_stack.shape)
-        PstackV_col = np.zeros(self._n*self._k, dtype=complex)
-        nnz_count = 0
+        PstackV_fullsize_template = sp.vstack([self.Pstruct] * self._k, dtype=complex, format='csr')
+        PstackV_fullsize_template.data[:] = 0.0
+        # template needed because individual P_j may be sparser than Pstruct
+        Pdata_stack = (PstackV_fullsize_template + self.PstackV).data
+        return Pdata_stack.reshape((self.Pstruct.size, self._k), order='F')
+    
+    def set_Pdata_column_stack(self, Pdata: ArrayLike):
+        """Set the Projector using the columns of Pdata as the sparse entries of every P_j, 
+        assuming the current Pstruct as given.
+        """
+        if Pdata.shape[0] != self.Pstruct.size:
+            raise ValueError("Pdata size mismatch with Pstruct.")
         
-        for l in range(self._n):
-            PstackV_indices = self.PstackV.indices[self.PstackV.indptr[l]:self.PstackV.indptr[l+1]]
-            PstackV_data = self.PstackV.data[self.PstackV.indptr[l]:self.PstackV.indptr[l+1]]
-            PstackV_col[PstackV_indices] = PstackV_data
-            
-            col_nnz = self.Pstruct.indptr[l+1] - self.Pstruct.indptr[l]
-            
-            Pstruct_indices = self.Pstruct.indices[self.Pstruct.indptr[l]:self.Pstruct.indptr[l+1]]
-            Pdata_stack[nnz_count:nnz_count+col_nnz, :] = PstackV_col.reshape((self._n,self._k), order='F')[Pstruct_indices , :]
-            
-            # updates for processing next column
-            nnz_count += col_nnz
-            PstackV_col[PstackV_indices] = 0.0
+        self._k = Pdata.shape[1]
         
-        return Pdata_stack
+        if self._is_diagonal:
+            self.Pdiags = np.zeros((self._n,self._k), dtype=complex)
+            self.Pdiags[self.Pstruct.indices, :] = Pdata
+            return
+        
+        self.PstackV = sp.vstack([self.Pstruct] * self._k, dtype=complex, format='csr')
+        self.PstackV.data = Pdata.flatten(order='F')
+        
+        self.PstackH = sp.hstack([self.Pstruct] * self._k, dtype=complex, format='csc')
+        self.PstackH.data = Pdata.flatten(order='F')
+        return
 
     def allP_at_v(self, v: ComplexArray, dagger: bool = False) -> ComplexArray:
         """Compute all P_j @ v (or P_j^† @ v) and return an (n, k) matrix.
@@ -222,8 +229,11 @@ class Projectors():
         if self._is_diagonal:
             M = self.Pdiags.conj() if dagger else self.Pdiags
             return M * v[:, None]  # (n, k)
-        # Use vertical stacks only; avoid runtime transposes
-        stacked = (self.PstackV_dag if dagger else self.PstackV) @ v  # (n*k,)
+        # Use vertical stack or horizontal stack depending on dagger to avoid runtime transposes
+        if dagger:
+            stacked = np.conj(v.conj() @ self.PstackH)
+        else:
+            stacked = self.PstackV @ v
         return stacked.reshape((self._n, self._k), order='F')          # (n, k)
 
     def weighted_sum_on_vector(
@@ -251,6 +261,9 @@ class Projectors():
             M = self.Pdiags.conj() if dagger else self.Pdiags   # (n, k)
             return (M * v[:, None]) @ w                          # (n,)
 
-        stacked = (self.PstackV_dag if dagger else self.PstackV) @ v   # (n*k,)
+        if dagger:
+            stacked = np.conj(v.conj() @ self.PstackH)
+        else:
+            stacked = self.PstackV @ v                                 # (n*k,)
         mat = stacked.reshape((self._n, self._k), order='F')           # (n, k)
         return mat @ w                                                 # (n,)
