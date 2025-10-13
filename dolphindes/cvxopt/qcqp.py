@@ -9,13 +9,7 @@ implementations optimized for different matrix structures.
 __all__ = ["SparseSharedProjQCQP", "DenseSharedProjQCQP"]
 
 import copy
-from typing import (
-    Any,
-    Iterator,
-    Optional,
-    Tuple,
-    cast,
-)
+from typing import Any
 
 import numpy as np
 import scipy.linalg as la
@@ -145,7 +139,7 @@ class SparseSharedProjQCQP(_SharedProjQCQP):
         return new_QCQP
 
     def compute_precomputed_values(self) -> None:
-        """Compute precomputed constraint data then initialize symbolic factorization."""
+        """Precompute constraint data then initialize symbolic factorization."""
         super().compute_precomputed_values()
         self._initialize_Acho()
 
