@@ -494,7 +494,8 @@ def test_dense_qcqp_with_general_constraint(dense_qcqp_data):
         sp.diags_array(Pdiags[:, j], format="csc") for j in range(Pdiags.shape[1])
     ]
     qcqp_gc = DenseSharedProjQCQP(
-        A0, s0, c, A1, s1, Projlist, None, A2=None, B_j=B_j, s_2j=s_2j, c_2j=c_2j, verbose=0
+        A0, s0, c, A1, s1, Projlist, None, A2=None, 
+        B_j=B_j, s_2j=s_2j, c_2j=c_2j, verbose=0
     )
     init_lags = qcqp_gc.find_feasible_lags()
     dual, lags, grad, hess, xstar = qcqp_gc.solve_current_dual_problem(
@@ -520,10 +521,12 @@ def test_dense_qcqp_only_general_constraint():
     c_2j = np.array([1.0])  # -x^T x + 1 = 0
 
     n_dim = s0.shape[0]
-    Pstruct = sp.eye_array(n_dim, format="csc")  # dummy structure for empty projector set
+    # dummy structure for empty projector set
+    Pstruct = sp.eye_array(n_dim, format="csc")
 
     qcqp = DenseSharedProjQCQP(
-        A0, s0, c0, A1, s1, Projlist, Pstruct, A2=None, B_j=B_j, s_2j=s_2j, c_2j=c_2j, verbose=0
+        A0, s0, c0, A1, s1, Projlist, Pstruct, A2=None, 
+        B_j=B_j, s_2j=s_2j, c_2j=c_2j, verbose=0
     )
 
     # Provide manual initial lag (one general constraint only)
@@ -615,7 +618,8 @@ def test_dense_qcqp_with_nondiagonal_projectors():
     s1 = rng.standard_normal(n) + 1j * rng.standard_normal(n)
     c0 = 0.0
 
-    qcqp = DenseSharedProjQCQP(A0, s0, c0, A1, s1, Projlist, Pstruct, A2=None, verbose=0)
+    qcqp = DenseSharedProjQCQP(A0, s0, c0, A1, s1, Projlist, 
+                               Pstruct, A2=None, verbose=0)
 
     lags0 = qcqp.find_feasible_lags()
     dual, grad, _, _ = qcqp.get_dual(lags0, get_grad=True)
