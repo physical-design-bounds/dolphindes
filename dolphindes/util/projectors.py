@@ -7,7 +7,7 @@ from numpy.typing import ArrayLike
 from dolphindes.types import ComplexArray, FloatNDArray
 
 
-def _detect_all_diagonal(matrix_list: list[sp.csc_array]) -> bool:
+def _detect_all_diagonal(matrix_list: list[sp.csr_array]) -> bool:
     """Return True if every matrix is square and has nonzeros only on the diagonal."""
     return all(
         mat.shape[0] == mat.shape[1]
@@ -68,8 +68,8 @@ class Projectors():
         else:
             # Build vertical and horizontal stacks for P to avoid runtime transposes
             # the csr vs csc specifications chosen for convenience in converting to / from Pdata representation
-            self.PstackV = sp.vstack(self.Plist, format='csr')
-            self.PstackH = sp.hstack(self.Plist, format='csc')
+            self.P_stackV = sp.vstack(self.Plist, format='csr')
+            self.Pconj_stackH = sp.hstack([P.conj() for P in self.Plist], format='csc')
         del self.Plist  # We do not need the original list
 
     def validate_projector(self, P: sp.csr_array) -> bool:
@@ -93,7 +93,7 @@ class Projectors():
         r0 = idx * self._n
         r1 = (idx + 1) * self._n
         # Extract block-rows corresponding to P[idx]
-        return self.PstackV[r0:r1, :]
+        return self.P_stackV[r0:r1, :]
 
     def __getitem__(self, key: int) -> sp.csr_array:
         """Return the key-th projector.
@@ -120,14 +120,14 @@ class Projectors():
     
     def _setitem_sparse(self, key: int, value: ArrayLike) -> None:
         idx = key % self._k
-        Pnew = sp.csr_array(value, dtype=self.PstackV.dtype)
+        Pnew = sp.csr_array(value, dtype=self.P_stackV.dtype)
         if not self.validate_projector(Pnew):
             raise ValueError("New projector inconsistent with sparsity structure.")
         r0 = idx * self._n
         r1 = (idx + 1) * self._n
         # Keep both stacks consistent (store P and its adjoint)
-        self.PstackV[r0:r1, :] = Pnew
-        self.PstackH[:, r0:r1] = Pnew.tocsc() # check if removing is fine
+        self.P_stackV[r0:r1, :] = Pnew
+        self.Pconj_stackH[:, r0:r1] = Pnew.conj().tocsc() # check if removing is fine
 
     def __setitem__(self, key: int, value: ArrayLike) -> None:
         if not isinstance(key, int):
@@ -145,8 +145,8 @@ class Projectors():
         if self._is_diagonal:
             self.Pdiags = self.Pdiags[:, m:]
         else:
-            self.PstackV = self.PstackV[m*self._n:, :]
-            self.PstackH = self.PstackH[:, m*self._n:]
+            self.P_stackV = self.P_stackV[m*self._n:, :]
+            self.Pconj_stackH = self.Pconj_stackH[:, m*self._n:]
         
         self._k -= m
         return
@@ -177,8 +177,8 @@ class Projectors():
         self._k += 1
         if not self.validate_projector(Pnew):
             raise ValueError("New projector inconsistent with sparsity structure.")
-        self.PstackV = sp.vstack((self.PstackV, Pnew), format='csr')
-        self.PstackH = sp.hstack((self.PstackH, Pnew.tocsc()), format='csc')
+        self.P_stackV = sp.vstack((self.P_stackV, Pnew), format='csr')
+        self.Pconj_stackH = sp.hstack((self.Pconj_stackH, Pnew.conj().tocsc()), format='csc')
         return
 
     def get_Pdata_column_stack(self) -> ComplexArray:
@@ -189,10 +189,10 @@ class Projectors():
         if self._is_diagonal:
             return self.Pdiags[self.Pstruct.indices, :]
         
-        PstackV_fullsize_template = sp.vstack([self.Pstruct] * self._k, dtype=complex, format='csr')
-        PstackV_fullsize_template.data[:] = 0.0
+        P_stackV_fullsize_template = sp.vstack([self.Pstruct] * self._k, dtype=complex, format='csr')
+        P_stackV_fullsize_template.data[:] = 0.0
         # template needed because individual P_j may be sparser than Pstruct
-        Pdata_stack = (PstackV_fullsize_template + self.PstackV).data
+        Pdata_stack = (P_stackV_fullsize_template + self.P_stackV).data
         return Pdata_stack.reshape((self.Pstruct.size, self._k), order='F')
     
     def set_Pdata_column_stack(self, Pdata: ArrayLike):
@@ -209,11 +209,15 @@ class Projectors():
             self.Pdiags[self.Pstruct.indices, :] = Pdata
             return
         
-        self.PstackV = sp.vstack([self.Pstruct] * self._k, dtype=complex, format='csr')
-        self.PstackV.data = Pdata.flatten(order='F')
+        self.P_stackV = sp.vstack([self.Pstruct] * self._k, dtype=complex, format='csr')
+        self.P_stackV.data = Pdata.flatten(order='F')
         
-        self.PstackH = sp.hstack([self.Pstruct] * self._k, dtype=complex, format='csc')
-        self.PstackH.data = Pdata.flatten(order='F')
+        self.Pconj_stackH = sp.hstack([self.Pstruct] * self._k, dtype=complex, format='csc')
+        # get data permutation order to go from csr representation to csc representation
+        permutation = self.Pstruct.astype(int, copy=True)
+        permutation.data = np.arange(self.Pstruct.size)
+        permutation = permutation.tocsc().data
+        self.Pconj_stackH.data = Pdata[permutation, :].conj().flatten(order='F')
         return
 
     def allP_at_v(self, v: ComplexArray, dagger: bool = False) -> ComplexArray:
@@ -231,9 +235,9 @@ class Projectors():
             return M * v[:, None]  # (n, k)
         # Use vertical stack or horizontal stack depending on dagger to avoid runtime transposes
         if dagger:
-            stacked = np.conj(v.conj() @ self.PstackH)
+            stacked = v @ self.Pconj_stackH
         else:
-            stacked = self.PstackV @ v
+            stacked = self.P_stackV @ v
         return stacked.reshape((self._n, self._k), order='F')          # (n, k)
 
     def weighted_sum_on_vector(
@@ -262,8 +266,8 @@ class Projectors():
             return (M * v[:, None]) @ w                          # (n,)
 
         if dagger:
-            stacked = np.conj(v.conj() @ self.PstackH)
+            stacked = v @ self.Pconj_stackH
         else:
-            stacked = self.PstackV @ v                                 # (n*k,)
+            stacked = self.P_stackV @ v                                 # (n*k,)
         mat = stacked.reshape((self._n, self._k), order='F')           # (n, k)
         return mat @ w                                                 # (n,)
