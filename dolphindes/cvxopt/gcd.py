@@ -65,10 +65,7 @@ def merge_lead_constraints(QCQP: _SharedProjQCQP, merged_num: int = 2) -> None:
 
     if hasattr(QCQP, "Fs"):
         QCQP.Fs = QCQP.Fs[:, merged_num-1:]
-        if sp.issparse(new_P):
-            QCQP.Fs[:,0] = QCQP.A2.conj().T @ (new_P.conj().T @ QCQP.s1)
-        else:
-            QCQP.Fs[:,0] = QCQP.A2.conj().T @ (new_P.conj() * QCQP.s1)
+        QCQP.Fs[:,0] = QCQP.A2.conj().T @ (new_P.conj().T @ QCQP.s1)
 
     QCQP.current_lags = QCQP.current_lags[merged_num-1:]
     QCQP.current_lags[0] = Pnorm
@@ -102,7 +99,7 @@ def add_constraints(
     if QCQP.current_lags is not None:
         new_lags = np.zeros(proj_cstrt_num + added_Pdata_num + QCQP.n_gen_constr, dtype=float)
         new_lags[:proj_cstrt_num] = QCQP.current_lags[:proj_cstrt_num]
-        new_lags[-QCQP.n_gen_constr:] = QCQP.current_lags[-QCQP.n_gen_constr:]
+        new_lags[proj_cstrt_num + added_Pdata_num:] = QCQP.current_lags[proj_cstrt_num:]
         QCQP.current_lags = new_lags
 
     if orthonormalize:
@@ -126,12 +123,16 @@ def add_constraints(
 
         if hasattr(QCQP, "precomputed_As"):
             # updated precomputed_As
-            QCQP.precomputed_As.insert(QCQP.n_proj_constr + m,
+            QCQP.precomputed_As.insert(proj_cstrt_num + m,
                 Sym(QCQP.A1 @ Pnew @ QCQP.A2)
             )
 
     if hasattr(QCQP, "Fs"):
-        QCQP.Fs = QCQP.A2.conj().T @ QCQP.Proj.allP_at_v(QCQP.s1, dagger=True)
+        new_Fs = np.zeros((QCQP.Fs.shape[0], len(QCQP.Proj) + QCQP.n_gen_constr), dtype=complex)
+        new_Fs[:, :len(QCQP.Proj)] = QCQP.A2.conj().T @ QCQP.Proj.allP_at_v(QCQP.s1, dagger=True)
+        new_Fs[:, len(QCQP.Proj):] = QCQP.Fs[:, proj_cstrt_num:]
+        QCQP.Fs = new_Fs
+        # print('in add_constraints, len(QCQP.Proj)', len(QCQP.Proj), 'QCQP.Fs.shape', QCQP.Fs.shape)
 
     QCQP.n_proj_constr = len(QCQP.Proj)
     QCQP.current_grad = QCQP.current_hess = None
@@ -191,17 +192,21 @@ def run_gcd(
     opt_params = {**OPT_PARAMS_DEFAULTS, **opt_params}
 
     # get to feasible point
+    # TODO: revamp find_feasible_lags
     QCQP.current_lags = QCQP.find_feasible_lags()
     if orthonormalize:
         # orthonormalize QCQP
         # informally checked for correctness
-        x_size, proj_cstrt_num = QCQP.Pdiags.shape
-        realext_Pdiags = np.zeros((2 * x_size, proj_cstrt_num), dtype=float)
-        realext_Pdiags[:x_size, :] = np.real(QCQP.Pdiags)
-        realext_Pdiags[x_size:, :] = np.imag(QCQP.Pdiags)
-        realext_Pdiags_Q, realext_Pdiags_R = la.qr(realext_Pdiags, mode="economic")
-        QCQP.Pdiags = realext_Pdiags_Q[:x_size, :] + 1j * realext_Pdiags_Q[x_size:, :]
-        QCQP.current_lags = realext_Pdiags_R @ QCQP.current_lags
+        x_size = QCQP.Proj.Pstruct.size
+        proj_cstrt_num = QCQP.n_proj_constr
+        Pdata = QCQP.Proj.get_Pdata_column_stack()
+        realext_Pdata = np.zeros((2 * x_size, proj_cstrt_num), dtype=float)
+        realext_Pdata[:x_size, :] = np.real(Pdata)
+        realext_Pdata[x_size:, :] = np.imag(Pdata)
+        realext_Pdata_Q, realext_Pdata_R = la.qr(realext_Pdata, mode="economic")
+        
+        QCQP.Proj.set_Pdata_column_stack(realext_Pdata_Q[:x_size, :] + 1j * realext_Pdata_Q[x_size:, :])
+        QCQP.current_lags[:QCQP.n_proj_constr] = realext_Pdata_R @ QCQP.current_lags[:QCQP.n_proj_constr]
         QCQP.compute_precomputed_values()
 
     ## gcd loop
@@ -210,6 +215,9 @@ def run_gcd(
     while True:
         gcd_iter_num += 1
         # solve current dual problem
+        #print('at gcd iter num', gcd_iter_num)
+        #print('QCQP.current_lags', QCQP.current_lags)
+        #print('QCQP.Fs.shape', QCQP.Fs.shape)
         QCQP.solve_current_dual_problem(
             "newton", init_lags=QCQP.current_lags, opt_params=opt_params
         )
@@ -225,25 +233,34 @@ def run_gcd(
                 break
             gcd_prev_dual = QCQP.current_dual
 
+        ## generate new constraints
+        new_Pdata_list = []
+        Pstruct_rows, Pstruct_cols = QCQP.Proj.Pstruct.nonzero()
         ## generate max dualgrad constraint
-        maxViol_Pdiag = (2 * QCQP.s1 - (QCQP.A1.conj().T @ QCQP.current_xstar)) * (
-            QCQP.A2 @ QCQP.current_xstar
-        ).conj()
+        maxViol_Pdiag = ((2 * QCQP.s1 - (QCQP.A1.conj().T @ QCQP.current_xstar))[Pstruct_rows] 
+                         * (QCQP.A2 @ QCQP.current_xstar).conj()[Pstruct_cols])
+
+        if la.norm(maxViol_Pdiag) >= 1e-14:
+            new_Pdata_list.append(maxViol_Pdiag)
+            # skip this new constraint if maxViol_Pdiag is uniformly 0
+            #can happen if there are no linear forms in objective and all constraints
 
         ## generate min A eig constraint
         minAeigv, minAeigw = QCQP._get_PSD_penalty(QCQP.current_lags)
-        minAeig_Pdiag = (QCQP.A1.conj().T @ minAeigv) * (QCQP.A2 @ minAeigv).conj()
-        # use the same relative weights for minAeig_Pdiag as maxViol_Pdiag
+        minAeig_Pdiag = ((QCQP.A1.conj().T @ minAeigv)[Pstruct_rows]
+                         * (QCQP.A2 @ minAeigv).conj()[Pstruct_cols])
+        
         minAeig_Pdiag /= np.sqrt(np.real(minAeig_Pdiag.conj() * minAeig_Pdiag))
-        minAeig_Pdiag * np.sqrt(np.real(maxViol_Pdiag.conj() * maxViol_Pdiag))
+        # minAeig_Pdiag * np.sqrt(np.real(maxViol_Pdiag.conj() * maxViol_Pdiag)) # use the same relative weights for minAeig_Pdiag as maxViol_Pdiag
         # informally checked that minAeigw increases when increasing multiplier of minAeig_Pdiag
-
+        new_Pdata_list.append(minAeig_Pdiag)
+        
         ## add new constraints
-        QCQP.add_constraints([maxViol_Pdiag, minAeig_Pdiag], orthonormalize=orthonormalize)
+        QCQP.add_constraints(new_Pdata_list, orthonormalize=orthonormalize)
         # informally checked that new constraints are added in orthonormal fashion
 
         ## merge old constraints if necessary
-        if QCQP.Pdiags.shape[1] > max_proj_cstrt_num:
+        if len(QCQP.Proj) > max_proj_cstrt_num:
             QCQP.merge_lead_constraints(
-                merged_num=QCQP.Pdiags.shape[1] - max_proj_cstrt_num + 1
+                merged_num=len(QCQP.Proj) - max_proj_cstrt_num + 1
             )

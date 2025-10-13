@@ -721,7 +721,7 @@ class _SharedProjQCQP(ABC):
 
     def run_gcd(
         self,
-        max_cstrt_num: int = 10,
+        max_proj_cstrt_num: int = 10,
         orthonormalize: bool = True,
         opt_params: Optional[dict[str, Any]] = None,
         max_gcd_iter_num: int = 50,
@@ -734,7 +734,7 @@ class _SharedProjQCQP(ABC):
 
         Parameters
         ----------
-        max_cstrt_num : int
+        max_proj_cstrt_num : int
             Maximum number of projector constraints to keep.
         orthonormalize : bool
             Whether to orthonormalize constraints during updates.
@@ -747,13 +747,9 @@ class _SharedProjQCQP(ABC):
         gcd_tol : float
             Tolerance for GCD convergence.
         """
-        if self.n_gen_constr > 0:
-            raise NotImplementedError(
-                "GCD not implemented for QCQPs with general constraints."
-            )
         gcd.run_gcd(
             self,
-            max_cstrt_num=max_cstrt_num,
+            max_proj_cstrt_num=max_proj_cstrt_num,
             orthonormalize=orthonormalize,
             opt_params=opt_params,
             max_gcd_iter_num=max_gcd_iter_num,
@@ -857,7 +853,7 @@ class _SharedProjQCQP(ABC):
         return self.Proj, self.current_lags
 
     def iterative_splitting_step(
-        self, method: str = "bfgs", max_cstrt_num: int | float = np.inf
+        self, method: str = "bfgs", max_proj_cstrt_num: int | float = np.inf
     ) -> Iterator[
         Tuple[float, np.ndarray, np.ndarray, Optional[np.ndarray], np.ndarray]
     ]:
@@ -866,7 +862,7 @@ class _SharedProjQCQP(ABC):
 
         Stop when:
         - each projector has at most one non-zero column (pixel level for diagonal), or
-        - the number of constraints reaches max_cstrt_num.
+        - the number of constraints reaches max_proj_cstrt_num.
 
         Yields
         ------
@@ -883,15 +879,15 @@ class _SharedProjQCQP(ABC):
             return np.array(sizes, int)
 
         # Early exit if already above cap or pixel-level
-        max_cstrt_num = int(min(max_cstrt_num, 2 * (self.A0.shape[0])))
-        if self.n_proj_constr >= max_cstrt_num:
+        max_proj_cstrt_num = int(min(max_proj_cstrt_num, 2 * (self.A0.shape[0])))
+        if self.n_proj_constr >= max_proj_cstrt_num:
             if self.verbose > 0:
                 print("Projector count already at or above specified maximum.")
             return
 
         while True:
             sizes = projector_column_support_sizes()
-            if self.n_proj_constr >= max_cstrt_num or np.all(sizes <= 1):
+            if self.n_proj_constr >= max_proj_cstrt_num or np.all(sizes <= 1):
                 if self.verbose > 0:
                     print("Reached maximum projectors or pixel-level constraints.")
                 break
