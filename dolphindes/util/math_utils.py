@@ -5,6 +5,7 @@ from collections.abc import Callable
 import numpy as np
 
 from dolphindes.types import ComplexArray, SparseDense
+from collections.abc import Callable
 
 
 def Sym(A: SparseDense) -> SparseDense:
