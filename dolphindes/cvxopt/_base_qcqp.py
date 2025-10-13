@@ -5,7 +5,7 @@ from typing import Any, Iterator, Optional, Tuple, cast
 import numpy as np
 import scipy.sparse as sp
 import scipy.sparse.linalg as spla
-from numpy.typing import ArrayLike
+from numpy.typing import ArrayLike, NDArray
 
 from dolphindes.cvxopt import gcd
 from dolphindes.types import ComplexArray, FloatNDArray, SparseDense
@@ -149,14 +149,18 @@ class _SharedProjQCQP(ABC):
             # Ensure complex dtype by default
             P0 = Plist[0]
             Pstruct = (
-                P0.astype(complex).copy() if sp.issparse(P0) 
+                P0.astype(complex).copy()
+                if sp.issparse(P0)
                 else np.asarray(P0, dtype=complex).copy()
             )
             for P in Plist:
                 # Use complex scalar to guarantee complex promotion
                 coef = (np.random.rand() + 0.01) + 0j
-                Pcomplex = (P.astype(complex) if sp.issparse(P) 
-                            else np.asarray(P, dtype=complex))  
+                Pcomplex = (
+                    P.astype(complex)
+                    if sp.issparse(P)
+                    else np.asarray(P, dtype=complex)
+                )
                 Pstruct += coef * Pcomplex
 
         # Ensure complex dtype when converting to CSC
@@ -208,8 +212,9 @@ class _SharedProjQCQP(ABC):
         for i in range(len(self.B_j)):
             self.precomputed_As.append(Sym(self.A2.conj().T @ self.B_j[i] @ self.A2))
 
-        self.Fs: ComplexArray = np.zeros((self.A2.shape[1], 
-                                          len(self.precomputed_As)), dtype=complex)
+        self.Fs: ComplexArray = np.zeros(
+            (self.A2.shape[1], len(self.precomputed_As)), dtype=complex
+        )
         # For diagonal P: allP_at_v(self.s1, dagger=True) == (Pdiags.conj().T * s1).T
         if self.n_proj_constr > 0:
             Pv = self.Proj.allP_at_v(self.s1, dagger=True)  # shape (n, k)
@@ -471,8 +476,13 @@ class _SharedProjQCQP(ABC):
         if penalty_vectors is None:
             penalty_vectors = []
 
+        # Make Optional explicit for mypy
+        grad: Optional[FloatNDArray]
+        hess: Optional[FloatNDArray]
         grad, hess = None, None
-        grad_penalty, hess_penalty = np.array([]), np.array([[]])
+        # Default penalty containers so DualAux is always defined
+        grad_penalty: FloatNDArray = np.zeros(0, dtype=float)
+        hess_penalty: FloatNDArray = np.zeros((0, 0), dtype=float)
 
         xstar, dualval = self._get_xstar(lags)
         dualval += self.c0 + self._get_total_C(lags)
@@ -519,12 +529,14 @@ class _SharedProjQCQP(ABC):
             u = self.A1.conj().T @ xstar  # (n,)  aka A1^H x*
             Py = self.Proj.allP_at_v(A2_xstar)  # (n, k)  columns: P_j y
 
-            term1 = -np.real(u.conj() @ Py)  # (k,)
-            term2 = 2 * np.real(xstar.conj() @ self.Fs[:, : self.n_proj_constr])  # (k,)
-            grad = term1 + term2
+            term1_proj = -np.real(u.conj() @ Py)  # (k,) float64
+            term2_proj = 2.0 * np.real(
+                xstar.conj() @ self.Fs[:, : self.n_proj_constr]
+            )  # (k,) float64
+            proj_grad = term1_proj + term2_proj  # (k,) float64
 
             if self.n_gen_constr > 0:
-                gen_constr_grad = np.zeros(self.n_gen_constr)
+                gen_constr_grad = np.zeros(self.n_gen_constr, dtype=float)
                 for i in range(self.n_gen_constr):
                     gen_constr_grad[i] = np.real(
                         -xstar.conj().T
@@ -535,7 +547,10 @@ class _SharedProjQCQP(ABC):
                         + 2 * xstar.conj().T @ self.A2.conj().T @ self.s_2j[i]
                         + self.c_2j[i]
                     )
-                grad = np.concatenate((grad, gen_constr_grad))
+                grad_full = np.concatenate((proj_grad, gen_constr_grad))
+                grad = cast(FloatNDArray, grad_full)
+            else:
+                grad = cast(FloatNDArray, proj_grad)
 
         # Boundary penalty for the PSD boundary
         dualval_penalty = 0.0
@@ -560,8 +575,8 @@ class _SharedProjQCQP(ABC):
                         # is likely a speed bottleneck
                         Fv[:, k] = Ak @ A_inv_penalty[:, j]
 
-                    grad_penalty += np.real(-A_inv_penalty[:, j].conj().T @ Fv)
-                    hess_penalty += 2 * np.real(Fv.conj().T @ self._Acho_solve(Fv))
+                grad_penalty += np.real(-A_inv_penalty[:, j].conj().T @ Fv)
+                hess_penalty += 2 * np.real(Fv.conj().T @ self._Acho_solve(Fv))
 
             elif get_grad:
                 grad = cast(FloatNDArray, grad)
@@ -612,10 +627,16 @@ class _SharedProjQCQP(ABC):
         )
 
         if len(penalty_vectors) > 0:
+            grad_out: Optional[FloatNDArray] = (
+                None if grad is None else cast(FloatNDArray, grad + grad_penalty)
+            )
+            hess_out: Optional[FloatNDArray] = (
+                None if hess is None else cast(FloatNDArray, hess + hess_penalty)
+            )
             return (
                 dualval + dualval_penalty,
-                grad + grad_penalty,
-                hess + hess_penalty,
+                grad_out,
+                hess_out,
                 dual_aux,
             )
         else:
@@ -774,11 +795,11 @@ class _SharedProjQCQP(ABC):
             gcd_tol=gcd_tol,
         )
 
-    def refine_projectors(self) -> Tuple[Any, np.ndarray]:
+    def refine_projectors(self) -> Tuple[Any, NDArray[np.float64]]:
         """
-        Refine projector constraints by splitting each projector into two sub-projectors.
+        Refine projector constraints by splitting each projector into two projectors.
 
-        Strategy (diagonal or not):
+        Strategy (diagonal):
           - Identify non-empty column support of P (columns with nnz > 0).
           - If support size <= 1: keep P as is.
           - Else, build two diagonal column masks S1, S2 that partition the support
@@ -795,15 +816,22 @@ class _SharedProjQCQP(ABC):
                 "Cannot refine projectors until an existing problem is solved. "
                 "Run solve_current_dual_problem first."
             )
+        if self.Proj.is_diagonal() is False:
+            raise NotImplementedError(
+                "Refinement only implemented for diagonal projectors."
+            )
+
+        # Treat current_lags as non-Optional for type checker
+        curr_lags: NDArray[np.float64] = cast(NDArray[np.float64], self.current_lags)
 
         # Preserve current dual for verification
-        old_dual = self.get_dual(self.current_lags, get_grad=False)[0]
+        old_dual = self.get_dual(curr_lags, get_grad=False)[0]
 
         # Extract old projectors and lags
         old_proj_count = self.n_proj_constr
-        old_proj_lags = np.array(self.current_lags[:old_proj_count], float)
+        old_proj_lags = np.array(curr_lags[:old_proj_count], float)
         old_gen_lags = (
-            np.array(self.current_lags[old_proj_count:], float)
+            np.array(curr_lags[old_proj_count:], float)
             if self.n_gen_constr > 0
             else np.array([], float)
         )
@@ -856,7 +884,9 @@ class _SharedProjQCQP(ABC):
         self.compute_precomputed_values()
 
         # Verify the dual value remains the same (A and S unchanged)
-        new_dual = self.get_dual(self.current_lags, get_grad=False)[0]
+        new_dual = self.get_dual(cast(FloatNDArray, self.current_lags), get_grad=False)[
+            0
+        ]
         if self.verbose >= 1:
             print(f"previous dual: {old_dual}, new dual: {new_dual} (should match)")
         assert np.isclose(new_dual, old_dual, rtol=1e-2, atol=1e-8), (
@@ -867,12 +897,12 @@ class _SharedProjQCQP(ABC):
         self.current_dual = new_dual
         # current_grad/hess/xstar are now stale; recompute lazily when next requested
 
-        return self.Proj, self.current_lags
+        return self.Proj, cast(NDArray[np.float64], self.current_lags)
 
     def iterative_splitting_step(
         self, method: str = "bfgs", max_proj_cstrt_num: int | float = np.inf
     ) -> Iterator[
-        Tuple[float, np.ndarray, np.ndarray, Optional[np.ndarray], np.ndarray]
+        Tuple[float, FloatNDArray, FloatNDArray, Optional[FloatNDArray], ComplexArray]
     ]:
         """
         Generate successive solutions by refining projectors and solving the dual.
@@ -887,7 +917,7 @@ class _SharedProjQCQP(ABC):
             (current_dual, current_lags, current_grad, current_hess, current_xstar)
         """
 
-        def projector_column_support_sizes() -> np.ndarray:
+        def projector_column_support_sizes() -> NDArray[np.int_]:
             sizes = []
             for j in range(self.n_proj_constr):
                 Pj = self.Proj[j]
@@ -911,7 +941,7 @@ class _SharedProjQCQP(ABC):
 
             if self.verbose > 0:
                 print(f"Splitting projectors: {self.n_proj_constr} → ", end="")
-            # Refine (updates self.Proj/self.current_lags and recomputes precomputations)
+            # Refine (updates self.Proj/self.current_lags and recomputes precomputation)
             self.refine_projectors()
             if self.verbose > 0:
                 print(f"{self.n_proj_constr}")
@@ -920,4 +950,13 @@ class _SharedProjQCQP(ABC):
             result = self.solve_current_dual_problem(
                 method, init_lags=self.current_lags
             )
-            yield result
+            yield cast(
+                Tuple[
+                    float,
+                    FloatNDArray,
+                    FloatNDArray,
+                    Optional[FloatNDArray],
+                    ComplexArray,
+                ],
+                result,
+            )
