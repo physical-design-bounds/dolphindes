@@ -35,7 +35,7 @@ class _Optimizer:
     Attributes
     ----------
     optfunc : Callable
-        The optimization objective function, returns a tuple (f(x), grad_f(x), 
+        The optimization objective function, returns a tuple (f(x), grad_f(x),
         hess_f(x), aux_data), which may contain zeroes if the method does not need them.
     feasible_func : Callable[[FloatNDArray], bool]
         Function to check if a solution is feasible.
@@ -65,6 +65,7 @@ class _Optimizer:
         "break_iter_period": 50,
         "verbose": 0,
     }
+
     def __init__(
         self,
         optfunc: Callable[..., Tuple[float, FloatNDArray, FloatNDArray, Any]],
@@ -106,7 +107,7 @@ class _Optimizer:
         init_step_size: float,
     ) -> Tuple[float, float]:
         """Backtracking line search.
-        
+
         This method implements a two-phase backtracking line search:
         1. Find a feasible step size by backtracking until the point is feasible
         2. Find optimal step satisfying the Armijo condition & minimizing function value
@@ -165,7 +166,7 @@ class _Optimizer:
             if self.verbose >= 3:
                 print("backtracking tmp_value", tmp_value)
             # the dual is still decreasing as we backtrack, continue
-            if tmp_value < opt_val:  
+            if tmp_value < opt_val:
                 opt_val = tmp_value
                 alpha_opt = alpha
             else:
@@ -183,8 +184,7 @@ class _Optimizer:
         return alpha_opt, alpha_feas
 
     def run(
-        self, 
-        x0: ArrayLike
+        self, x0: ArrayLike
     ) -> Tuple[FloatNDArray, float, FloatNDArray, FloatNDArray | None]:
         """Run the optimization routine with initial point x0.
 
@@ -202,7 +202,7 @@ class _Optimizer:
         grad_opt : FloatNDArray
             Gradient of the objective function at the optimal point.
         hess_opt : FloatNDArray | None
-            Hessian of the objective function at the optimal point, or None if not 
+            Hessian of the objective function at the optimal point, or None if not
             computed.
         """
         raise NotImplementedError("Optimizer.run() must be implemented in subclasses")
@@ -215,7 +215,7 @@ class BFGS(_Optimizer):
     ---------------------
         - run() is implemented via BFGS optimization algorithm
         - _break_condition() is implemented to check for convergence
-        - _update_hess_inv() is implemented to update the inverse Hessian approximation 
+        - _update_hess_inv() is implemented to update the inverse Hessian approximation
           as part of BFGS
     """
 
@@ -278,7 +278,7 @@ class BFGS(_Optimizer):
             if iter_num > self.opt_params["max_restart"]:
                 if self.verbose >= 2:
                     print(
-                         "Maximum number of outer iterations reached: "
+                        "Maximum number of outer iterations reached: "
                         f"{self.opt_params['max_restart']}"
                     )
                 return True
@@ -358,13 +358,13 @@ class BFGS(_Optimizer):
         return new_Hinv
 
     def _add_penalty(
-        self, 
-        opt_step_size: float, 
-        last_step_size: float, 
-        feas_step_size: float, 
-        x0: FloatNDArray, 
-        dir: FloatNDArray, 
-        opt_fx0: float
+        self,
+        opt_step_size: float,
+        last_step_size: float,
+        feas_step_size: float,
+        x0: FloatNDArray,
+        dir: FloatNDArray,
+        opt_fx0: float,
     ) -> Tuple[float, bool]:
         if np.isclose(opt_step_size, last_step_size, atol=0.0):
             # if no backtracking happened, can start with a more aggressive stepsize
@@ -389,11 +389,11 @@ class BFGS(_Optimizer):
             return opt_step_size, False
 
     def run(
-        self, 
-        x0: ArrayLike, 
+        self,
+        x0: ArrayLike,
     ) -> Tuple[FloatNDArray, float, FloatNDArray, None]:
         """Run BFGS optimization routine with initial point x0.
-        
+
         Parameters
         ----------
         x0 : ArrayLike
@@ -500,7 +500,7 @@ class Alt_Newton_GD(_Optimizer):
 
     Additional Features:
     ---------------------
-        - run() is implemented via alternating Newton and gradient descent steps; 
+        - run() is implemented via alternating Newton and gradient descent steps;
           alternating improves stability
         - _break_condition() is implemented to check for convergence
     """
@@ -571,7 +571,7 @@ class Alt_Newton_GD(_Optimizer):
             if iter_num > self.opt_params["max_restart"]:
                 if self.verbose >= 1:
                     print(
-                         "Maximum number of outer iterations reached: "
+                        "Maximum number of outer iterations reached: "
                         f"{self.opt_params['max_restart']}"
                     )
                 return True
@@ -619,7 +619,7 @@ class Alt_Newton_GD(_Optimizer):
         self, x0: ArrayLike
     ) -> Tuple[FloatNDArray, float, FloatNDArray, FloatNDArray]:
         """Run alternating Newton-GD optimization routine with initial point x0.
-        
+
         Parameters
         ----------
         x0 : ArrayLike
@@ -662,7 +662,6 @@ class Alt_Newton_GD(_Optimizer):
                 )
 
             while True:
-
                 doN = inner_iter_count % 2 == 1  # alternate between Newton and GD steps
                 self.opt_fx, self.xgrad, self.xhess, _ = self.optfunc(
                     self.opt_x,
@@ -679,13 +678,19 @@ class Alt_Newton_GD(_Optimizer):
 
                 # find step for next iteration
                 if doN:
-                    Ndir = np.linalg.solve(self.xhess, -self.xgrad)
-                    xdir = Ndir / np.linalg.norm(Ndir)
-                    last_step_size = last_N_step_size
-                    if self.verbose >= 2:
-                        print("doing Newton step")
-                        # print("xdir dot xgrad is", np.dot(xdir, self.xgrad))
-                else:
+                    try:
+                        Ndir = np.linalg.solve(self.xhess, -self.xgrad)
+                        xdir = Ndir / np.linalg.norm(Ndir)
+                        last_step_size = last_N_step_size
+                        if self.verbose >= 2:
+                            print("doing Newton step")
+                            # print("xdir dot xgrad is", np.dot(xdir, self.xgrad))
+                    except np.linalg.LinAlgError:
+                        doN = 0
+                        if self.verbose >= 2:
+                            print("Hessian is singular")
+
+                if not doN:
                     if self.verbose >= 2:
                         print("doing GD step")
                     xdir = -self.xgrad / np.linalg.norm(self.xgrad)

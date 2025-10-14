@@ -1,30 +1,36 @@
 """
-Classes for calculating QCQP design bounds for photonics problems, 
-bridging the QCQP Dual Problem Interface in cvxopt 
+Classes for calculating QCQP design bounds for photonics problems.
+
+Bridges the QCQP Dual Problem Interface in cvxopt 
 and the Maxwell Solvers in maxwell
 """
 
 __all__ = []
 
+import warnings
+from typing import Tuple
+import copy  # added
+
 import numpy as np
 import scipy.sparse as sp
 import scipy.sparse.linalg as spla
-from dolphindes.cvxopt import SparseSharedProjQCQP, DenseSharedProjQCQP
+
+from dolphindes.cvxopt import DenseSharedProjQCQP, SparseSharedProjQCQP
 from dolphindes.maxwell import TM_FDFD
 from dolphindes.util import check_attributes
-from typing import Tuple 
-import warnings
+
 
 class Photonics_FDFD():
     """
-    Mother class for frequency domain photonics problems numerically described using FDFD.
+    Mother class for frequency domain problems with finite difference discretization.
+
     To allow for lazy initialization, only demands omega upon init
     
     Specification of the photonics design objective:
-    if sparseQCQP is False, the objective is specified as a quadratic function of the polarization p
-    max_p -p^dagger A0 p + 2 Re (p^dagger s0) + c0
+    if sparseQCQP is False, the objective is specified as a quadratic function of the 
+    polarization p: max_p -p^dagger A0 p + 2 Re (p^dagger s0) + c0
     
-    if sparseQCQP is True, the objective is specified as a quadratic function of (Gp)
+    if sparseQCQP is True, the objective is specified as a quadratic function of (Gp):
     max_{Gp} -(Gp)^dagger A0 (Gp) + 2 Re((Gp)^dagger s0) + c0
     
     Attributes
@@ -69,6 +75,7 @@ class Photonics_FDFD():
     c0 : float
         The constant c0 in the QCQP field design objective. 
     """
+
     def __init__(self, omega, chi=None, Nx=None, Ny=None, Npmlx=None, Npmly=None, dx=None, dy=None, # FDFD solver attr
                  des_mask=None, ji=None, ei=None, chi_background=None, # design problem attr
                  bloch_x=0.0, bloch_y=0.0, # FDFD solver attr
@@ -98,7 +105,18 @@ class Photonics_FDFD():
         self.s0 = s0
         self.c0 = c0
         self.Pdiags = Pdiags
-        
+
+    def __deepcopy__(self, memo):
+        """Deep copy this instance."""
+        cls = self.__class__
+        new = cls.__new__(cls)
+        memo[id(self)] = new
+        for k, v in self.__dict__.items():
+            try:
+                setattr(new, k, copy.deepcopy(v, memo))
+            except Exception:
+                setattr(new, k, v)  # fallback to reference
+        return new
 
 class Photonics_TM_FDFD(Photonics_FDFD):
     def __init__(self, omega, chi=None, 
@@ -127,7 +145,6 @@ class Photonics_TM_FDFD(Photonics_FDFD):
             check_attributes(self, 'omega', 'chi', 'Nx', 'Ny', 'Npmlx', 'Npmly', 'des_mask', 'bloch_x', 'bloch_y', 'dl', 'sparseQCQP')
             self.setup_EM_solver()
             self.setup_EM_operators()
-            
         except AttributeError as e:
             warnings.warn("Photonics_TM_FDFD initialized with missing attributes (lazy initialization). We strongly recommend passing all arguments for expected behavior.")
 
@@ -169,10 +186,14 @@ class Photonics_TM_FDFD(Photonics_FDFD):
             if A0 is not None:
                 self.A0 = self.Ginv.T.conj() @ sp.csc_array(A0) @ self.Ginv
             if s0 is not None:
+                self.dense_s0 = s0
                 self.s0 = self.Ginv.T.conj() @ s0
         else:
-            if A0 is not None: self.A0 = A0
-            if s0 is not None: self.s0 = s0
+            if A0 is not None: 
+                self.A0 = A0
+            if s0 is not None: 
+                self.s0 = s0
+                self.dense_s0 = None
         
         if c0 is not None: self.c0 = c0
 
@@ -280,9 +301,9 @@ class Photonics_TM_FDFD(Photonics_FDFD):
         """
         self.ei = ei 
         
-    def setup_QCQP(self, Pdiags="global", verbose: float = 0):
+    def setup_QCQP(self, Pdiags: str = "global", verbose: float = 0) -> None:
         """
-        Setup the quadratically constrained quadratic programming (QCQP) problem.
+        Set up the quadratically constrained quadratic programming (QCQP) problem.
         
         Parameters
         ----------
@@ -306,7 +327,8 @@ class Photonics_TM_FDFD(Photonics_FDFD):
         """
         check_attributes(self, 'des_mask', 'A0', 's0', 'c0')
         
-        self.Ndes = int(np.sum(self.des_mask)) # number of field degrees of freedom / pixels in design region
+        # number of field degrees of freedom / pixels in design region
+        self.Ndes = int(np.sum(self.des_mask)) 
         
         # generate initial field
         if (self.ji is None) and (self.ei is None):
@@ -317,8 +339,10 @@ class Photonics_TM_FDFD(Photonics_FDFD):
         self.get_ei(self.ji, update=True)
 
         if Pdiags=="global":
-            self.Pdiags = np.ones((self.Ndes,2), dtype=complex)
-            self.Pdiags[:,1] = -1j
+            # Build projectors as a list of matrices (new API)
+            # old behavior: two columns with [1, -1j] on the diagonal
+            I = sp.eye_array(self.Ndes, dtype=complex, format="csc")
+            self.Plist = [I, (-1j) * I]
         else:
             raise ValueError("Not a valid Pdiags specification / needs implementation")
         
@@ -331,17 +355,17 @@ class Photonics_TM_FDFD(Photonics_FDFD):
 
             self.QCQP = SparseSharedProjQCQP(self.A0, self.s0, self.c0, 
                                             A1_sparse, A2_sparse, self.ei[self.des_mask]/2, 
-                                            self.Pdiags, verbose=verbose
+                                            self.Plist, verbose=verbose
                                             )
         else:
             if self.G is None: 
                 self.setup_EM_operators()
             
             A1_dense = np.conj(1.0/self.chi)*np.eye(self.G.shape[0]) - self.G.conj().T
-
+            print(self.A0.shape, self.s0.shape, self.c0, A1_dense.shape, self.ei[self.des_mask].shape)
             self.QCQP = DenseSharedProjQCQP(self.A0, self.s0, self.c0,
                                             A1_dense, self.ei[self.des_mask]/2,
-                                            self.Pdiags, verbose=verbose
+                                            self.Plist, verbose=verbose
                                             ) # for dense QCQP formulation A2 is not needed 
 
     def bound_QCQP(self, method : str = 'bfgs', init_lags : np.ndarray = None, opt_params : dict = None):
@@ -469,7 +493,6 @@ class Photonics_TM_FDFD(Photonics_FDFD):
 class Photonics_TE_Yee_FDFD(Photonics_FDFD):
     def __init__(self):
         pass
-
 
 ## Utility functions for photonics problems
 

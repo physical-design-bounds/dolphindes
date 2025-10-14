@@ -33,5 +33,10 @@ warn_unused_ignores = true
 warn_redundant_casts = true
 warn_unused_configs = true
 
+# Ignore all mypy errors inside the tests package so tests don't need annotations.
+[[tool.mypy.overrides]]
+module = ["tests.*"]
+ignore_errors = true
+
 [tool.setuptools.package-data]
 "dolphindes" = ["py.typed"]

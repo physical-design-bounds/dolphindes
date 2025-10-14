@@ -1,11 +1,11 @@
 """
 Maxwell solver for E-fields in 2D.
 
-Main purpose is to calculate source fields and vacuum Green's functions for 
+Main purpose is to calculate source fields and vacuum Green's functions for
 bounds calculations. Inspired by the Ceviche and EMopt solvers.
 
-Warning: this is not meant to be a high-performance Maxwell solver! Most bounds 
-calculations require a single solve for the initial source (if not known) and 
+Warning: this is not meant to be a high-performance Maxwell solver! Most bounds
+calculations require a single solve for the initial source (if not known) and
 one for the Green's function.
 """
 
@@ -206,7 +206,7 @@ class TM_FDFD(Maxwell_FDFD):
             """Fictional conductivity for adding PML.
 
             Note that these values might need tuning.
-            
+
             Parameters
             ----------
             distance_into_pml : float
@@ -223,13 +223,13 @@ class TM_FDFD(Maxwell_FDFD):
 
         def s_value(distance_into_pml: float, dw: float, omega: complex) -> complex:
             """S-value to use in the S-matrices.
-            
+
             Parameters
             ----------
             distance_into_pml : float
                 Distance from the PML-material interface into the PML region
             dw : float
-                Total PML thickness  
+                Total PML thickness
             omega : complex
                 Angular frequency
             """
@@ -242,13 +242,9 @@ class TM_FDFD(Maxwell_FDFD):
             sfactor_array = np.ones(N, dtype=complex)
             for i in range(N):
                 if i <= N_pml:
-                    sfactor_array[i] = s_value(
-                        dL * (N_pml - i + 0.5), dw, omega
-                    )
+                    sfactor_array[i] = s_value(dL * (N_pml - i + 0.5), dw, omega)
                 elif i > N - N_pml:
-                    sfactor_array[i] = s_value(
-                        dL * (i - (N - N_pml) - 0.5), dw, omega
-                    )
+                    sfactor_array[i] = s_value(dL * (i - (N - N_pml) - 0.5), dw, omega)
             return sfactor_array
 
         def create_sfactor_b(
@@ -258,23 +254,19 @@ class TM_FDFD(Maxwell_FDFD):
             sfactor_array = np.ones(N, dtype=complex)
             for i in range(N):
                 if i <= N_pml:
-                    sfactor_array[i] = s_value(
-                        dL * (N_pml - i + 1), dw, omega
-                    )
+                    sfactor_array[i] = s_value(dL * (N_pml - i + 1), dw, omega)
                 elif i > N - N_pml:
-                    sfactor_array[i] = s_value(
-                        dL * (i - (N - N_pml) - 1), dw, omega
-                    )
+                    sfactor_array[i] = s_value(dL * (i - (N - N_pml) - 1), dw, omega)
             return sfactor_array
 
         def create_sfactor(
             dir: str, omega: complex, dL: float, N: int, N_pml: int
         ) -> ComplexGrid:
             """Create the S-factor cross section needed in the S-matrices."""
-            if N_pml == 0: 
+            if N_pml == 0:
                 return np.ones(N, dtype=complex)
             dw = N_pml * dL
-            if dir == "f": 
+            if dir == "f":
                 return create_sfactor_f(omega, dL, N, N_pml, dw)
             if dir == "b":
                 return create_sfactor_b(omega, dL, N, N_pml, dw)
@@ -321,7 +313,7 @@ class TM_FDFD(Maxwell_FDFD):
             Sy_f_vec = Sy_f_2D.flatten()
             Sy_b_vec = Sy_b_2D.flatten()
 
-            # Construct the 1D total s-vector into a diagonal matrix 
+            # Construct the 1D total s-vector into a diagonal matrix
             # using diags_array instead of spdiags
             Sx_f = sp.dia_array((Sx_f_vec, 0), shape=(N, N))
             Sx_b = sp.dia_array((Sx_b_vec, 0), shape=(N, N))
@@ -349,15 +341,11 @@ class TM_FDFD(Maxwell_FDFD):
         Dyb = Syb @ Dyb
 
         M = sp.csc_array(
-            -Dxf @ Dxb
-            - Dyf @ Dyb
-            - self.EPSILON_0 * self.omega**2 * sp.eye(Nx * Ny)
+            -Dxf @ Dxb - Dyf @ Dyb - self.EPSILON_0 * self.omega**2 * sp.eye(Nx * Ny)
         )
         return M
 
-    def _get_diagM_from_chigrid(
-        self, chigrid: ComplexGrid
-    ) -> sp.dia_array:
+    def _get_diagM_from_chigrid(self, chigrid: ComplexGrid) -> sp.dia_array:
         """
         Get the diagonal part of the Maxwell operator from the material.
 
@@ -381,7 +369,7 @@ class TM_FDFD(Maxwell_FDFD):
         cy : int
             y-coordinate of the dipole source.
         chigrid : np.ndarray (dtype complex), optional
-            spatial distribution of material susceptibility. The default is None, 
+            spatial distribution of material susceptibility. The default is None,
             corresponding to vacuum.
 
         Returns
@@ -398,13 +386,13 @@ class TM_FDFD(Maxwell_FDFD):
     ) -> ComplexGrid:
         """
         Get the field of a TM source at positions in sourcegrid.
-        
+
         Parameters
         ----------
         sourcegrid : np.ndarray (dtype complex)
             spatial distribution of the source.
         chigrid : np.ndarray (dtype complex), optional
-            spatial distribution of material susceptibility. The default is None, 
+            spatial distribution of material susceptibility. The default is None,
             corresponding to vacuum.
 
         Returns
@@ -419,21 +407,19 @@ class TM_FDFD(Maxwell_FDFD):
             else self.M0
         )
         RHS = 1j * self.omega * sourcegrid.flatten()
-        Ez: ComplexGrid = np.reshape(
-            sp.linalg.spsolve(M, RHS), (self.Nx, self.Ny)
-        )
+        Ez: ComplexGrid = np.reshape(sp.linalg.spsolve(M, RHS), (self.Nx, self.Ny))
         return Ez
 
     def get_TM_Gba(self, A_mask: BoolGrid, B_mask: BoolGrid) -> ComplexGrid:
         """
         Compute the vacuum Green's function G_{BA}.
-        
+
         This function maps sources in region A to fields in region B.
 
-        This routine exploits translational symmetry by embedding two copies of the 
-        non-PML domain into a larger "big" grid. A single dipole solve at the center 
-        of the big grid produces a field map Ezfield. For each source location in the 
-        design (A_mask), we extract the corresponding window of size 
+        This routine exploits translational symmetry by embedding two copies of the
+        non-PML domain into a larger "big" grid. A single dipole solve at the center
+        of the big grid produces a field map Ezfield. For each source location in the
+        design (A_mask), we extract the corresponding window of size
         (nonpmlNx × nonpmlNy) and sample at the observation mask B_mask.
 
         Parameters
@@ -474,9 +460,7 @@ class TM_FDFD(Maxwell_FDFD):
         bigcy = self.Npmly + self.nonpmlNy - 1  # center y index
 
         # assemble vacuum Maxwell operator on the big grid
-        A = self._make_TM_Maxwell_Operator(
-            bigNx, bigNy, self.Npmlx, self.Npmly
-        )
+        A = self._make_TM_Maxwell_Operator(bigNx, bigNy, self.Npmlx, self.Npmly)
 
         # place a unit dipole source at the center of the big grid
         sourcegrid = np.zeros((bigNx, bigNy), dtype=complex)
@@ -497,9 +481,7 @@ class TM_FDFD(Maxwell_FDFD):
             ix, iy = design_idx[i]
             ulx = bigcx - ix  # upper-left corner x of the small grid in big grid
             uly = bigcy - iy  # upper-left corner y
-            window = Ezfield[
-                ulx : ulx + self.nonpmlNx, uly : uly + self.nonpmlNy
-            ]
+            window = Ezfield[ulx : ulx + self.nonpmlNx, uly : uly + self.nonpmlNy]
             Gba[:, i] = window[B_mask_s]
 
         # scale to get the true vacuum Green's function for TM polarization
@@ -511,9 +493,9 @@ class TM_FDFD(Maxwell_FDFD):
     ) -> tuple[sp.csc_array, sp.csc_array]:
         """
         Compute the inverse Green's function on region A, G_{AA}^{-1}.
-        
+
         Utilizes the Woodbury identity to perform inversion.
-        We partition the full Maxwell operator M into blocks corresponding to region A 
+        We partition the full Maxwell operator M into blocks corresponding to region A
         (design) and its complement B (background):
             M = [[A, B],
                  [C, D]]

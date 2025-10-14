@@ -31,9 +31,9 @@ def test_maxwell_TM() -> None:
     Ez_sim_large = np.zeros((Nx, Ny), dtype=complex)
     Ez_sim_large[A_mask] = Ez_simulation[A_mask]
 
-    assert np.allclose(
-        Ez_large, Ez_sim_large, atol=1e-6
-    ), "Ez from Gaa does not match Ez from simulation"
+    assert np.allclose(Ez_large, Ez_sim_large, atol=1e-6), (
+        "Ez from Gaa does not match Ez from simulation"
+    )
 
     print("Testing GaaInv and Gaa agreement")
     GaaInv, M = simulation.get_GaaInv(A_mask)
@@ -41,6 +41,6 @@ def test_maxwell_TM() -> None:
     assert type(M) is sp.csc_array
     assert GaaInv.shape == (np.sum(A_mask), np.sum(A_mask)), "GaaInv shape mismatch"
 
-    assert np.allclose(
-        GaaInv @ Gaa, np.eye(np.sum(A_mask)), atol=1e-6
-    ), "GaaInv @ Gaa does not equal identity matrix"
+    assert np.allclose(GaaInv @ Gaa, np.eye(np.sum(A_mask)), atol=1e-6), (
+        "GaaInv @ Gaa does not equal identity matrix"
+    )

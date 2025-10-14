@@ -5,7 +5,6 @@ from typing import TypeAlias, Union
 import numpy as np
 import scipy.sparse as sp
 from numpy.typing import ArrayLike, NDArray
-import typing
 
 # Public-facing (input) wide types
 ArrayLikeFloat: TypeAlias = ArrayLike
