@@ -11,7 +11,7 @@ from dolphindes.cvxopt import GCDHyperparameters, gcd
 from dolphindes.types import ComplexArray
 from dolphindes.util import math_utils
 
-from .photonics import Photonics_FDFD
+from ._base_photonics import Photonics_FDFD
 
 
 @dataclass(frozen=True)
@@ -56,7 +56,7 @@ class VerlanProblem:
     Only for use in scraping, it is overkill just to bound a simple problem and extract a global / local initial guess.
     """
     def __init__(
-        self, PhotonicProblem: any, verlan_params: VerlanHyperparameters
+        self, PhotonicProblem: Photonics_FDFD, verlan_params: VerlanHyperparameters
     ) -> None:
         self.PhotonicProblem = copy.deepcopy(PhotonicProblem)
 
