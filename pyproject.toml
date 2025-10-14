@@ -1,3 +1,48 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+# This section defines your package's metadata and dependencies.
+[project]
+name = "dolphindes"
+version = "0.1.0"
+authors = [
+  { name="Your Name", email="your@email.com" },
+]
+description = "A short description of your package."
+readme = "README.md"
+requires-python = ">=3.10"
+
+# These are the core libraries your package needs to run.
+dependencies = [
+    "numpy",
+    "scipy",
+    "matplotlib",
+    "pyside6",
+    "requests",
+    "pyyaml",
+    "numba",
+    "nlopt",
+    "scikit-sparse",
+]
+
+# This section defines optional sets of dependencies, e.g., for development or building docs.
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-dependency",
+    "ruff",
+    "mypy",
+    "isort",
+    "ipykernel", # For Jupyter support
+]
+docs = [
+    "sphinx",
+    "sphinx-rtd-theme",
+    "myst-parser",
+]
+
+
 # -----------------------------
 # Import sorting: isort
 # -----------------------------

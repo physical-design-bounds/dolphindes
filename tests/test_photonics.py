@@ -1,7 +1,7 @@
 import pytest
 import numpy as np
 import scipy.sparse as sp
-from dolphindes.photonics.photonics import Photonics_TM_FDFD
+from dolphindes.photonics import Photonics_TM_FDFD, CartesianFDFDGeometry
 
 
 def test_Photonics_TM_FDFD_adjoint():
@@ -51,13 +51,23 @@ def test_Photonics_TM_FDFD_adjoint():
     s0_p = np.zeros(Ndes, dtype=complex)
     A0_p = (omega / 2) * np.imag(1.0 / chi) * sp.eye_array(Ndes) * dl**2
 
+    ## setup geometry
+    geometry = CartesianFDFDGeometry(
+        Nx=Nx,
+        Ny=Ny,
+        Npmlx=Npmlx,
+        Npmly=Npmly,
+        dx=dl,
+        dy=dl,
+        bloch_x=0.0,
+        bloch_y=0.0
+    )
+
     ## setup Photonics_TM_FDFD objects
     abs_problem_sparse = Photonics_TM_FDFD(
         omega=omega,
+        geometry=geometry,
         chi=chi,
-        dl=dl,
-        grid_size=(Nx, Ny),
-        pml_size=(Npmlx, Npmly),
         chi_background=chi_background,
         des_mask=des_mask,
         ji=ji,
@@ -69,10 +79,8 @@ def test_Photonics_TM_FDFD_adjoint():
     ## adding non-trivial chi_background makes setup_EM_operators very slow
     abs_problem_dense = Photonics_TM_FDFD(
         omega=omega,
+        geometry=geometry,
         chi=chi,
-        dl=dl,
-        grid_size=(Nx, Ny),
-        pml_size=(Npmlx, Npmly),
         chi_background=chi_background,
         des_mask=des_mask,
         ji=ji,
