@@ -5,8 +5,9 @@ from ._base_photonics import (
     GeometryHyperparameters,
     Photonics_FDFD,
 )
-from .photonics import Photonics_TM_FDFD, Photonics_TE_Yee_FDFD, chi_to_feasible_rho
-from .verlan import VerlanHyperparameters, VerlanProblem
+from .photonics import Photonics_TE_Yee_FDFD, Photonics_TM_FDFD, chi_to_feasible_rho
+
+# from .verlan import VerlanHyperparameters, VerlanProblem
 
 __all__ = [
     "GeometryHyperparameters",
@@ -15,6 +16,6 @@ __all__ = [
     "Photonics_TM_FDFD",
     "Photonics_TE_Yee_FDFD",
     "chi_to_feasible_rho",
-    "VerlanProblem",
-    "VerlanHyperparameters",
+    # "VerlanProblem",
+    # "VerlanHyperparameters",
 ]
