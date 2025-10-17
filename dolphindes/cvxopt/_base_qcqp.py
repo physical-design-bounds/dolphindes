@@ -1,6 +1,7 @@
+import warnings
 from abc import ABC, abstractmethod
 from collections import namedtuple
-from typing import TYPE_CHECKING, Any, Iterator, Optional, Tuple, cast
+from typing import TYPE_CHECKING, Any, Callable, Iterator, Optional, Tuple, cast
 
 import numpy as np
 import scipy.sparse as sp
@@ -99,6 +100,9 @@ class _SharedProjQCQP(ABC):
         s_2j: list[ArrayLike] | None = None,
         c_2j: ArrayLike | None = None,
         verbose: int = 0,
+        strong_duality_checker: Callable[[ComplexArray, float], bool] | None = None,
+        A2dagger_inv_s0_func: Callable[[ComplexArray, ComplexArray], ComplexArray]
+        | None = None,
     ) -> None:
         if B_j is None:
             all_mat_sp = [sp.issparse(A0), sp.issparse(A1)]
@@ -191,6 +195,9 @@ class _SharedProjQCQP(ABC):
 
         if self.use_precomp:
             self.compute_precomputed_values()
+
+        self.strong_duality_checker = strong_duality_checker
+        self.A2dagger_inv_s0_func = A2dagger_inv_s0_func
 
     def compute_precomputed_values(self) -> None:
         """
@@ -643,6 +650,27 @@ class _SharedProjQCQP(ABC):
             )
         else:
             return dualval, grad, hess, dual_aux
+
+    def check_constraint(self, delta: float, idx: int) -> bool:
+        """Check if a constraint holds within tolerance delta.
+
+        Arguments
+        ---------
+        delta : float
+            Tolerance for checking if the constraint gradient is zero.
+        idx : int
+            Index of the constraint to check.
+
+        Returns
+        -------
+        bool
+            True if the constraint holds within tolerance.
+        """
+        gradient = self.current_grad
+        if gradient is None:
+            raise ValueError("QCQP has not been solved yet.")
+        compact_gradient = gradient[idx]
+        return bool(np.linalg.norm(compact_gradient) < delta)
 
     def solve_current_dual_problem(
         self,
