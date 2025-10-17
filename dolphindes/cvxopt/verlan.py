@@ -2,26 +2,40 @@
 
 import copy
 from dataclasses import dataclass
-from typing import Tuple, cast
+from typing import Callable, Tuple, cast
 
 import numpy as np
-from numpy.typing import ArrayLike
 
 from dolphindes.cvxopt import GCDHyperparameters, gcd
+from dolphindes.cvxopt._base_qcqp import _SharedProjQCQP
 from dolphindes.types import ComplexArray
 from dolphindes.util import math_utils
 
-from ._base_photonics import Photonics_FDFD
+# write a is_strongly_dual function for QCQPs. This must be overriden in general - can't do it generally.
+# write a function to compute A2inv^dagger s0 for QCQPs. Abstract method. For photonics, override it with the answer.
+# For dense, A2 will be identity, so just return s0.
 
+# Plan:
+# 1. I want verlan code that works on just QCQPs, but this is hard for multiple reasons:
+#    a. I need a function that takes a QCQP and returns True if it is strongly dual
+#    b. I need A2inv^dagger s0, but I don't want to invert A2 inside QCQP unless absolutely necessary
+#       Maybe I can have a function that does this in QCQP, and you can override it if you know it?
+# 2. So instead I will write a general verlan scheme that works for QCQPs, but leaves some things not implemented.
+#    Then I will subclass it for Photonics and implement the missing pieces.
+# 3. Hopefully this means Sean or the others can use it for other problems too, such as subset sum.
+
+# So what are the components?
+# First,
 
 @dataclass(frozen=True)
-class VerlanHyperparameters():
+class VerlanHyperparameters:
     """Hyperparameters for Verlan algorithm.
 
     Parameters
     ----------
     method : str
-        Method to use for Verlan. Options are "gcd" (default)
+        Method to use for Verlan. Options are "gcd" (default).
+        More options may be added in the future.
     delta : float
         Tolerance for checking strong duality. Default is 1e-3.
     loss_peak : float
@@ -48,15 +62,25 @@ class VerlanHyperparameters():
     gcd_params: GCDHyperparameters = GCDHyperparameters()
 
 
-class VerlanProblem:
-    """Verlan.
+def run_verlan(
+    s0: ComplexArray,
+    QCQP: "_SharedProjQCQP",
+    verlan_params: VerlanHyperparameters = VerlanHyperparameters(),
+    At,
+):
+    norm_s0 = float(np.linalg.norm(s0))
+    return norm_s0
     
-    Note
-    ----
-    Only for use in scraping, it is overkill just to bound a simple problem and extract a global / local initial guess.
-    """
+def _single_solve(
+    QCQP: _SharedProjQCQP,
+    t: float,
+    At: Callable
+):
+    pass
+
+class VerlanProblem:
     def __init__(
-        self, PhotonicProblem: Photonics_FDFD, verlan_params: VerlanHyperparameters
+        self, PhotonicProblem, verlan_params: VerlanHyperparameters
     ) -> None:
         self.PhotonicProblem = copy.deepcopy(PhotonicProblem)
 
@@ -65,18 +89,6 @@ class VerlanProblem:
         self.chi_original = copy.copy(self.PhotonicProblem.chi)
         self.params = verlan_params
         self.current_t = 1
-
-    def _get_dense_s0(self) -> Tuple[ComplexArray, float]:
-        """Get the (dense) objective parameter (s0, |s0|) in the photonics problem."""
-        sparse = self.PhotonicProblem.sparseQCQP
-        if sparse:
-            assert self.PhotonicProblem.dense_s0 is not None, "Dense s0 not available."
-            s0 = self.PhotonicProblem.dense_s0
-        else:
-            assert self.PhotonicProblem.s0 is not None, "s0 not available."
-            s0 = self.PhotonicProblem.s0
-        norm_s0 = float(np.linalg.norm(s0))
-        return s0, norm_s0
 
     def _get_chi_t(self, t: float, loss_peak: float) -> complex:
         """Get chi at interpolation parameter t.
@@ -129,7 +141,7 @@ class VerlanProblem:
         t: float,
     ) -> None:
         """Solve the photonic problem at interpolation parameter t.
-        
+
         Modifies the PhotonicProblem and PhotonicProblem.QCQP in place.
         """
         PhotonicProblem.chi = self._get_chi_t(t, self.params.loss_peak)
@@ -181,21 +193,21 @@ class VerlanProblem:
     #     self, PhotonicProblem: Photonics_FDFD, theta: float
     # ) -> Tuple[Photonics_FDFD, bool]:
     #     """Scrape the objective until strong duality is found.
-        
+
     #     Arguments
     #     ---------
     #     PhotonicProblem : Photonics_FDFD
     #         The photonic problem to modify.
     #     theta : float
     #         Angle in degrees to rotate s0 towards xstar during scraping.
-       
+
     #     Returns
     #     -------
     #     Photonic_FDFD
     #         The modified photonic problem after scraping.
     #     bool
     #         True if strong duality is found, False otherwise.
-            
+
     #     Notes
     #     -----
     #     Terminates if
