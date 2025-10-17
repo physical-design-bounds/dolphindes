@@ -66,6 +66,8 @@ select = ["E", "F", "I", "D"]
 # Enforce NumPy-style docstrings
 pydocstyle.convention = "numpy"
 
+[tool.ruff.format]
+
 # -----------------------------
 # Type checking: mypy
 # -----------------------------
