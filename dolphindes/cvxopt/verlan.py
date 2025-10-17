@@ -14,6 +14,17 @@ from dolphindes.cvxopt._base_qcqp import _SharedProjQCQP
 from dolphindes.types import ComplexArray
 from dolphindes.util import math_utils, print_underline
 
+# Plan:
+# 1. I want verlan code that works on just QCQPs, but this is hard for multiple reasons:
+#    a. I need a function that takes a QCQP and returns True if it is strongly dual
+#    b. I need A2inv^dagger s0, but I don't want to invert A2 inside QCQP unless absolutely necessary
+#       Maybe I can have a function that does this in QCQP, and you can override it if you know it?
+# 2. So instead I will write a general verlan scheme that works for QCQPs, but leaves some things not implemented.
+#    Then I will subclass it for Photonics and implement the missing pieces.
+# 3. Hopefully this means Sean or the others can use it for other problems too, such as subset sum.
+
+# So what are the components?
+# First,
 
 @dataclass(frozen=True)
 class VerlanHyperparameters:
