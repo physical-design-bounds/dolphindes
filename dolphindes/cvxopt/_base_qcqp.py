@@ -101,6 +101,9 @@ class _SharedProjQCQP(ABC):
         s_2j: list[ArrayLike] | None = None,
         c_2j: ArrayLike | None = None,
         verbose: int = 0,
+        strong_duality_checker: Callable[[ComplexArray, float], bool] | None = None,
+        A2dagger_inv_s0_func: Callable[[ComplexArray, ComplexArray], ComplexArray]
+        | None = None,
     ) -> None:
         if B_j is None:
             all_mat_sp = [sp.issparse(A0), sp.issparse(A1)]
