@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from collections import namedtuple
-from typing import Any, Iterator, Optional, Tuple, cast
+from typing import TYPE_CHECKING, Any, Iterator, Optional, Tuple, cast
 
 import numpy as np
 import scipy.sparse as sp
@@ -12,6 +12,9 @@ from dolphindes.types import ComplexArray, FloatNDArray, SparseDense
 from dolphindes.util import Projectors, Sym
 
 from .optimization import BFGS, Alt_Newton_GD, _Optimizer
+
+if TYPE_CHECKING:
+    from .gcd import GCDHyperparameters
 
 
 class _SharedProjQCQP(ABC):
@@ -738,7 +741,8 @@ class _SharedProjQCQP(ABC):
         merged_num : int, default 2
             Number of leading projector constraints to merge.
         """
-        gcd.merge_lead_constraints(self, merged_num=merged_num)
+        from . import gcd as _gcd
+        _gcd.merge_lead_constraints(self, merged_num=merged_num)
 
     def add_constraints(
         self, added_Pdata_list: list[ComplexArray], orthonormalize: bool = True
@@ -753,18 +757,14 @@ class _SharedProjQCQP(ABC):
         orthonormalize : bool, default True
             Whether to orthonormalize constraint set after insertion.
         """
-        gcd.add_constraints(
+        from . import gcd as _gcd
+        _gcd.add_constraints(
             self, added_Pdata_list=added_Pdata_list, orthonormalize=orthonormalize
         )
 
     def run_gcd(
         self,
-        max_proj_cstrt_num: int = 10,
-        orthonormalize: bool = True,
-        opt_params: Optional[dict[str, Any]] = None,
-        max_gcd_iter_num: int = 50,
-        gcd_iter_period: int = 5,
-        gcd_tol: float = 1e-2,
+        gcd_params: "Optional[GCDHyperparameters]" = None,
     ) -> None:
         """Run GCD to approach tightest dual bound for this QCQP.
 
@@ -772,28 +772,14 @@ class _SharedProjQCQP(ABC):
 
         Parameters
         ----------
-        max_proj_cstrt_num : int
-            Maximum number of projector constraints to keep.
-        orthonormalize : bool
-            Whether to orthonormalize constraints during updates.
-        opt_params : dict | None
-            Optimization parameters for inner dual solves.
-        max_gcd_iter_num : int
-            Maximum outer GCD iterations.
-        gcd_iter_period : int
-            Period for GCD iterations.
-        gcd_tol : float
-            Tolerance for GCD convergence.
+        gcd_params : GCDHyperparameters | None
+            GCD hyperparameters; if None, defaults are used.
         """
-        gcd.run_gcd(
-            self,
-            max_proj_cstrt_num=max_proj_cstrt_num,
-            orthonormalize=orthonormalize,
-            opt_params=opt_params,
-            max_gcd_iter_num=max_gcd_iter_num,
-            gcd_iter_period=gcd_iter_period,
-            gcd_tol=gcd_tol,
-        )
+        if gcd_params is None:
+            from .gcd import GCDHyperparameters as _GCDHyperparameters
+            gcd_params = _GCDHyperparameters()
+        from . import gcd as _gcd
+        _gcd.run_gcd(self, gcd_params)
 
     def refine_projectors(self) -> Tuple[Any, NDArray[np.float64]]:
         """

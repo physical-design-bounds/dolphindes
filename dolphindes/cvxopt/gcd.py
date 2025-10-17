@@ -11,11 +11,35 @@ For more mathematical details, see Appendix B of https://arxiv.org/abs/2504.1046
 """
 
 import numpy as np
+from dataclasses import dataclass
 import scipy.linalg as la
 
-# import the base class type for annotations
 from dolphindes.cvxopt._base_qcqp import _SharedProjQCQP
 from dolphindes.util import CRdot, Sym
+
+
+@dataclass(frozen=True)
+class GCDHyperparameters():
+    """Hyperparameters for GCD algorithm.
+
+    Parameters
+    ----------
+    method : str
+        Method to use for GCD. Options are "fast" (default)
+    delta : float
+        Tolerance for checking strong duality. Default is 1e-3.
+    loss_peak : float
+        Peak loss (imaginary part of chi) at t = 0.5. Default is 0.1.
+    max_iter : int | float
+        Maximum number of GCD iterations to perform. Default is np.inf.
+    """
+
+    max_proj_cstrt_num: int = 10
+    orthonormalize: bool = True
+    opt_params: dict | None = None
+    max_gcd_iter_num: int = 50
+    gcd_iter_period: int = 5
+    gcd_tol: float = 1e-2
 
 
 def merge_lead_constraints(QCQP: _SharedProjQCQP, merged_num: int = 2) -> None:
@@ -151,12 +175,13 @@ def add_constraints(
 
 def run_gcd(
     QCQP: _SharedProjQCQP,
-    max_proj_cstrt_num: int = 10,
-    orthonormalize: bool = True,
-    opt_params: dict | None = None,
-    max_gcd_iter_num: int = 50,
-    gcd_iter_period: int = 5,
-    gcd_tol: float = 1e-2,
+    gcd_params: GCDHyperparameters = GCDHyperparameters(),
+    # max_proj_cstrt_num: int = 10,
+    # orthonormalize: bool = True,
+    # opt_params: dict | None = None,
+    # max_gcd_iter_num: int = 50,
+    # gcd_iter_period: int = 5,
+    # gcd_tol: float = 1e-2,
 ) -> None:
     """
     Perform generalized constraint descent to gradually refine dual bound on QCQP.
@@ -199,13 +224,20 @@ def run_gcd(
     # since GCD is constantly changing the constraints, no need for many fake source 
     # iterations
     OPT_PARAMS_DEFAULTS = {"max_restart": 1}
-    if opt_params is None:
+    if gcd_params.opt_params is None:
         opt_params = {}
     opt_params = {**OPT_PARAMS_DEFAULTS, **opt_params}
 
     # get to feasible point
     # TODO: revamp find_feasible_lags
     QCQP.current_lags = QCQP.find_feasible_lags()
+    
+    orthonormalize = gcd_params.orthonormalize
+    max_proj_cstrt_num = gcd_params.max_proj_cstrt_num
+    max_gcd_iter_num = gcd_params.max_gcd_iter_num
+    gcd_iter_period = gcd_params.gcd_iter_period
+    gcd_tol = gcd_params.gcd_tol
+
     if orthonormalize:
         # orthonormalize QCQP
         # informally checked for correctness
