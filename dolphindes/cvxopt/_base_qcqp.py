@@ -1,13 +1,13 @@
+import warnings
 from abc import ABC, abstractmethod
 from collections import namedtuple
-from typing import TYPE_CHECKING, Any, Iterator, Optional, Tuple, cast
+from typing import TYPE_CHECKING, Any, Callable, Iterator, Optional, Tuple, cast
 
 import numpy as np
 import scipy.sparse as sp
 import scipy.sparse.linalg as spla
 from numpy.typing import ArrayLike, NDArray
 
-from dolphindes.cvxopt import gcd
 from dolphindes.types import ComplexArray, FloatNDArray, SparseDense
 from dolphindes.util import Projectors, Sym
 
@@ -100,6 +100,9 @@ class _SharedProjQCQP(ABC):
         s_2j: list[ArrayLike] | None = None,
         c_2j: ArrayLike | None = None,
         verbose: int = 0,
+        strong_duality_checker: Callable[[ComplexArray, float], bool] | None = None,
+        A2dagger_inv_s0_func: Callable[[ComplexArray, ComplexArray], ComplexArray]
+        | None = None,
     ) -> None:
         if B_j is None:
             all_mat_sp = [sp.issparse(A0), sp.issparse(A1)]
@@ -192,6 +195,9 @@ class _SharedProjQCQP(ABC):
 
         if self.use_precomp:
             self.compute_precomputed_values()
+
+        self.strong_duality_checker = strong_duality_checker
+        self.A2dagger_inv_s0_func = A2dagger_inv_s0_func
 
     def compute_precomputed_values(self) -> None:
         """
@@ -645,6 +651,27 @@ class _SharedProjQCQP(ABC):
         else:
             return dualval, grad, hess, dual_aux
 
+    def check_constraint(self, delta: float, idx: int) -> bool:
+        """Check if a constraint holds within tolerance delta.
+
+        Arguments
+        ---------
+        delta : float
+            Tolerance for checking if the constraint gradient is zero.
+        idx : int
+            Index of the constraint to check.
+
+        Returns
+        -------
+        bool
+            True if the constraint holds within tolerance.
+        """
+        gradient = self.current_grad
+        if gradient is None:
+            raise ValueError("QCQP has not been solved yet.")
+        compact_gradient = gradient[idx]
+        return bool(np.linalg.norm(compact_gradient) < delta)
+
     def solve_current_dual_problem(
         self,
         method: str,
@@ -742,6 +769,7 @@ class _SharedProjQCQP(ABC):
             Number of leading projector constraints to merge.
         """
         from . import gcd as _gcd
+
         _gcd.merge_lead_constraints(self, merged_num=merged_num)
 
     def add_constraints(
@@ -758,6 +786,7 @@ class _SharedProjQCQP(ABC):
             Whether to orthonormalize constraint set after insertion.
         """
         from . import gcd as _gcd
+
         _gcd.add_constraints(
             self, added_Pdata_list=added_Pdata_list, orthonormalize=orthonormalize
         )
@@ -777,8 +806,10 @@ class _SharedProjQCQP(ABC):
         """
         if gcd_params is None:
             from .gcd import GCDHyperparameters as _GCDHyperparameters
+
             gcd_params = _GCDHyperparameters()
         from . import gcd as _gcd
+
         _gcd.run_gcd(self, gcd_params)
 
     def refine_projectors(self) -> Tuple[Any, NDArray[np.float64]]:
@@ -946,3 +977,59 @@ class _SharedProjQCQP(ABC):
                 ],
                 result,
             )
+
+    def is_strongly_dual(self, xstar: ComplexArray, tol: float = 1e-3) -> bool:
+        """
+        Check if strong duality holds for point xstar.
+
+        This cannot be done generally, so this is just a helper that calls a
+        user-provided strong duality checker function if available.
+        This is a helper method for Verlan, which needs to verify strong duality
+        for certain QCQP instances.
+
+        Parameters
+        ----------
+        xstar : ComplexArray
+            The point to check strong duality for.
+        tol : float, default 1e-3
+            Tolerance for checking primal-dual gap.
+
+        Returns
+        -------
+        bool
+            True if strong duality holds for the given point.
+
+        Raises
+        ------
+        ValueError
+            If no strong duality checker is provided.
+        """
+        if self.strong_duality_checker is not None:
+            return self.strong_duality_checker(xstar, tol)
+        else:
+            raise ValueError(
+                "No strong duality checker provided for this QCQP instance."
+            )
+
+    def compute_A2dagger_inv_s0(self) -> ComplexArray:
+        """
+        Compute A2^†^{-1} s0 using the provided function if available.
+
+        Returns
+        -------
+        ComplexArray
+            The vector A2^†^{-1} s0.
+
+        Raises
+        ------
+        ValueError
+            If no A2dagger_inv_s0_func is provided.
+        """
+        if self.A2dagger_inv_s0_func is not None:
+            return self.A2dagger_inv_s0_func(self.A2, self.s0)
+        warnings.warn(
+            "No A2dagger_inv_s0_func provided; using direct inversion (may be slow).",
+            UserWarning,
+        )
+        A2dagger_inv = spla.inv(self.A2.conj().T)
+        return cast(ComplexArray, A2dagger_inv @ self.s0)
