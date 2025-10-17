@@ -10,8 +10,9 @@ For usage examples, see the notebooks examples/LDOS_gcd and examples/verlan/LDOS
 For more mathematical details, see Appendix B of https://arxiv.org/abs/2504.10469
 """
 
-import numpy as np
 from dataclasses import dataclass
+
+import numpy as np
 import scipy.linalg as la
 
 from dolphindes.cvxopt._base_qcqp import _SharedProjQCQP
@@ -19,7 +20,7 @@ from dolphindes.util import CRdot, Sym
 
 
 @dataclass(frozen=True)
-class GCDHyperparameters():
+class GCDHyperparameters:
     """Hyperparameters for GCD algorithm.
 
     Parameters
@@ -197,7 +198,7 @@ def run_gcd(
     the earlier constraints to keep the total number of constraints fixed. Setting
     max_proj_cstrt_num large enough will eventually result in evaluating the dual bound
     with all possible constraints, which gives the tightest bound but may be extremely
-    expensive. The goal of GCD is to approximate this tightest bound with greatly 
+    expensive. The goal of GCD is to approximate this tightest bound with greatly
     reduced computational cost.
 
     Parameters
@@ -221,7 +222,7 @@ def run_gcd(
     -----
     TODO: formalize optimization and convergence parameters.
     """
-    # since GCD is constantly changing the constraints, no need for many fake source 
+    # since GCD is constantly changing the constraints, no need for many fake source
     # iterations
     OPT_PARAMS_DEFAULTS = {"max_restart": 1}
     if gcd_params.opt_params is None:
@@ -231,7 +232,7 @@ def run_gcd(
     # get to feasible point
     # TODO: revamp find_feasible_lags
     QCQP.current_lags = QCQP.find_feasible_lags()
-    
+
     orthonormalize = gcd_params.orthonormalize
     max_proj_cstrt_num = gcd_params.max_proj_cstrt_num
     max_gcd_iter_num = gcd_params.max_gcd_iter_num
@@ -302,7 +303,7 @@ def run_gcd(
         ).conj()[Pstruct_cols]
 
         minAeig_Pdiag /= np.sqrt(np.real(minAeig_Pdiag.conj() * minAeig_Pdiag))
-        # minAeig_Pdiag * np.sqrt(np.real(maxViol_Pdiag.conj() * maxViol_Pdiag)) 
+        # minAeig_Pdiag * np.sqrt(np.real(maxViol_Pdiag.conj() * maxViol_Pdiag))
         # use the same relative weights for minAeig_Pdiag as maxViol_Pdiag
         # informally checked that minAeigw increases when increasing multiplier of
         # minAeig_Pdiag
