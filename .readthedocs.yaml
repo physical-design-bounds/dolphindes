@@ -3,6 +3,7 @@ version: 2
 # Build environment
 build:
   os: ubuntu-22.04
+  commands: [] 
 
 # Use your conda environment file
 conda:
