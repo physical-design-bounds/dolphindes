@@ -1,18 +1,19 @@
 version: 2
 
+# Build environment
 build:
   os: ubuntu-22.04
   tools:
-    python: "3.12"
+    python: "3.13"  # Match the Python version from your .yml file
 
-# Install dependencies using pip
-python:
-  install:
-    - requirements: docs/requirements.txt  # Or your main requirements file
-    - path: .                           # This will now work
+# Use your conda environment file
+conda:
+  environment: dolphindes.yml
 
+# Sphinx configuration
 sphinx:
   configuration: docs/conf.py
 
+# Optional formats
 formats:
   - htmlzip
