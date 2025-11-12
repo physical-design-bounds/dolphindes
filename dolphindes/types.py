@@ -17,7 +17,6 @@ BoolGrid: TypeAlias = NDArray[np.bool_]
 SparseDense: TypeAlias = Union[ComplexGrid, sp.sparray]
 
 __all__ = [
-    "ArrayLikeFloat",
     "FloatNDArray",
     "IntNDArray",
     "ComplexArray",
