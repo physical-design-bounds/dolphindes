@@ -147,6 +147,53 @@ class Projectors:
         else:
             self._setitem_sparse(key, value)
 
+    def __contains__(self, P: SparseDense) -> bool:
+        """Check if projector P is already in the list.
+        
+        Returns True if P matches any existing projector (within numerical tolerance).
+        """
+        return self.find_index(P) is not None
+
+    def find_index(self, P: SparseDense) -> int | None:
+        """Find the index of projector P if it exists in the list.
+        
+        Parameters
+        ----------
+        P : SparseDense
+            Projector to search for.
+            
+        Returns
+        -------
+        int | None
+            Index of the projector if found, None otherwise.
+        """
+        if self._k == 0:
+            return None
+            
+        P_check = sp.csr_array(P, dtype=complex)
+        if P_check.shape != (self._n, self._n):
+            return None
+            
+        if self._is_diagonal:
+            # For diagonal projectors, compare diagonals
+            P_diag = P_check.diagonal()
+            for j in range(self._k):
+                if np.allclose(P_diag, self.Pdiags[:, j], rtol=1e-10, atol=1e-12):
+                    return j
+            return None
+        else:
+            # For general sparse projectors, compare matrices
+            for j in range(self._k):
+                P_j = self[j]
+                if P_check.shape == P_j.shape and P_check.nnz == P_j.nnz:
+                    # Quick structural check first
+                    if np.array_equal(P_check.indices, P_j.indices) and \
+                       np.array_equal(P_check.indptr, P_j.indptr):
+                        # Then check values
+                        if np.allclose(P_check.data, P_j.data, rtol=1e-10, atol=1e-12):
+                            return j
+            return None
+
     def erase_leading(self, m: int) -> None:
         """Remove the first m projection matrices."""
         if self._is_diagonal:

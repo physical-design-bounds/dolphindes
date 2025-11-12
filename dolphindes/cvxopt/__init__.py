@@ -8,6 +8,7 @@ from .qcqp import (
     DenseSharedProjQCQP,
     SparseSharedProjQCQP,
 )
+from .verlan import VerlanHyperparameters, run_verlan
 
 __all__ = [
     "_SharedProjQCQP",
@@ -18,4 +19,6 @@ __all__ = [
     "OptimizationHyperparameters",
     "gcd",
     "GCDHyperparameters",
+    "run_verlan",
+    "VerlanHyperparameters",
 ]
