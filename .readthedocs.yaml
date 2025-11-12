@@ -3,7 +3,10 @@ version: 2
 # Build environment
 build:
   os: ubuntu-22.04
-  commands: [] 
+  # This command satisfies the validator without
+  # interfering with the conda build.
+  commands:
+    - "/bin/true"
 
 # Use your conda environment file
 conda:
