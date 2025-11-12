@@ -10,18 +10,20 @@ build:
 conda:
   environment: dolphindes.yml
 
-# Additional commands after conda environment is ready
-commands:
-  # Install your package in editable mode so autodoc can import it
-  - pip install -e .
+# Install your package in editable mode
+python:
+  install:
+    - method: pip
+      path: .
+      editable: true
 
 # Sphinx configuration
 sphinx:
   configuration: docs/conf.py
 
-# Output formats (optional, only if you want PDF or EPUB)
+# Output formats (optional)
 formats:
-  - htmlzip   # zip of HTML docs
+  - htmlzip   # default HTML build is automatic
   # - pdf
   # - epub
 
