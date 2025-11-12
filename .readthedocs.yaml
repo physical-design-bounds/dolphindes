@@ -1,4 +1,3 @@
-# ReadTheDocs build configuration
 version: 2
 
 # Build environment
@@ -20,7 +19,9 @@ commands:
 sphinx:
   configuration: docs/conf.py
 
-# Output formats
+# Output formats (optional, only if you want PDF or EPUB)
 formats:
-  - html
+  - htmlzip   # zip of HTML docs
+  # - pdf
+  # - epub
 
