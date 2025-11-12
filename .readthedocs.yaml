@@ -1,29 +1,18 @@
 version: 2
 
-# Build environment
 build:
   os: ubuntu-22.04
   tools:
     python: "3.12"
 
-# Use your conda environment
-conda:
-  environment: dolphindes.yml
-
-# Install your package in editable mode
+# Install dependencies using pip
 python:
   install:
-    - method: pip
-      path: .
-      editable: true
+    - requirements: docs/requirements.txt  # Or your main requirements file
+    - path: .                           # This will now work
 
-# Sphinx configuration
 sphinx:
   configuration: docs/conf.py
 
-# Output formats (optional)
 formats:
-  - htmlzip   # default HTML build is automatic
-  # - pdf
-  # - epub
-
+  - htmlzip
