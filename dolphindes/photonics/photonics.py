@@ -402,6 +402,36 @@ class Photonics_TM_FDFD(Photonics_FDFD):
 
         return float(obj)
 
+    def get_A1_A2(
+        self,
+        chi: complex,
+    ) -> Tuple[ComplexArray | sp.csc_array, ComplexArray | sp.csc_array]:
+        """
+        Get the A1, A2 matrix for the QCQP formulation.
+
+        Parameters
+        ----------
+        chi : complex
+            Susceptibility value.
+
+        Returns
+        -------
+        A1 : ndarray of complex
+            The A1 matrix.
+        """
+        if self.sparseQCQP:
+            assert self.Ndes is not None
+            assert self.Ginv is not None
+            A1 = sp.csc_array(
+                np.conj(1.0 / chi) * self.Ginv.conj().T - sp.eye(self.Ndes)
+            )
+            A2 = sp.csc_array(self.Ginv)
+        else:
+            assert self.G is not None
+            A1 = np.conj(1.0 / chi) * np.eye(self.G.shape[0]) - self.G.conj().T
+            A2 = np.eye(self.G.shape[0])  # Identity for dense QCQP
+        return A1, A2
+
 
 class Photonics_TE_Yee_FDFD(Photonics_FDFD):
     """TE polarization FDFD photonics problem (placeholder)."""

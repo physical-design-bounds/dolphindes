@@ -1,3 +1,4 @@
+import copy
 import warnings
 from abc import ABC, abstractmethod
 from collections import namedtuple
@@ -100,9 +101,6 @@ class _SharedProjQCQP(ABC):
         s_2j: list[ArrayLike] | None = None,
         c_2j: ArrayLike | None = None,
         verbose: int = 0,
-        strong_duality_checker: Callable[[ComplexArray, float], bool] | None = None,
-        A2dagger_inv_s0_func: Callable[[ComplexArray, ComplexArray], ComplexArray]
-        | None = None,
     ) -> None:
         if B_j is None:
             all_mat_sp = [sp.issparse(A0), sp.issparse(A1)]
@@ -193,11 +191,55 @@ class _SharedProjQCQP(ABC):
         self.current_xstar: Optional[ComplexArray] = None
         self.use_precomp = True
 
+        # Optional function callbacks
+        self.strong_duality_checker: Optional[
+            Callable[[ComplexArray, float], Tuple[float, bool]]
+        ] = None
+        # Optional PSD constraint projector (to re-append when needed)
+        self.psd_projector: Optional[SparseDense] = None
+
         if self.use_precomp:
             self.compute_precomputed_values()
 
-        self.strong_duality_checker = strong_duality_checker
-        self.A2dagger_inv_s0_func = A2dagger_inv_s0_func
+    def reinitialize_A_operators(
+        self,
+        A0: ArrayLike | sp.csc_array,
+        A1: ArrayLike | sp.csc_array,
+        A2: ArrayLike | sp.csc_array,
+    ) -> None:
+        """Replace the A0, A1, and A2 operators.
+
+        Only re-computes necessary quantities. Used in Verlan scheme.
+        """
+        existing_sparse = sp.issparse(self.A0)
+        incoming_sparse = sp.issparse(A0)
+        if existing_sparse != incoming_sparse:
+            raise ValueError("Reinitialization must preserve sparse/dense storage.")
+
+        if existing_sparse:
+            self.A0 = sp.csc_array(A0, dtype=complex)
+            self.A1 = sp.csc_array(A1, dtype=complex)
+        else:
+            self.A0 = np.asarray(A0, dtype=complex)
+            self.A1 = np.asarray(A1, dtype=complex)
+
+        self.A2 = (
+            sp.csc_array(A2, dtype=complex)
+            if sp.issparse(A2)
+            else np.asarray(A2, dtype=complex)
+        )
+
+        self.Acho = None
+        self.current_dual = None
+        self.current_grad = None
+        self.current_hess = None
+        self.current_lags = None
+        self.current_xstar = None
+
+        if self.use_precomp:
+            self.compute_precomputed_values()
+        elif hasattr(self, "_initialize_Acho"):
+            self._initialize_Acho()
 
     def compute_precomputed_values(self) -> None:
         """
@@ -356,7 +398,7 @@ class _SharedProjQCQP(ABC):
         pass
 
     def find_feasible_lags(
-        self, start: float = 0.1, limit: float = 1e8
+        self, start: float = 0.1, limit: float = 1e8, idx: int = 1
     ) -> FloatNDArray:
         """
         Heuristically find a dual feasible (PSD) set of Lagrange multipliers.
@@ -367,9 +409,11 @@ class _SharedProjQCQP(ABC):
         Parameters
         ----------
         start : float, default 0.1
-            Initial value assigned to lags[1] (must have ≥ 2 projector constraints).
+            Initial value assigned to lags[idx].
         limit : float, default 1e8
             Upper bound before giving up.
+        idx : int, default 1
+            Index of the projector constraint to scale.
 
         Returns
         -------
@@ -384,10 +428,10 @@ class _SharedProjQCQP(ABC):
         init_lags = np.random.random(self.n_proj_constr) * 1e-6
         init_lags = np.append(init_lags, len(self.B_j) * [0.0])
 
-        init_lags[1] = start
+        init_lags[idx] = start
         while self.is_dual_feasible(init_lags) is False:
-            init_lags[1] *= 1.5
-            if init_lags[1] > limit:
+            init_lags[idx] *= 1.5
+            if init_lags[idx] > limit:
                 raise ValueError(
                     "Could not find a feasible point for the dual problem."
                 )

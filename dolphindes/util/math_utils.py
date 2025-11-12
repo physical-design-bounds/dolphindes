@@ -159,10 +159,10 @@ def bool_binary_search(
         raise ValueError("tol must be positive.")
 
     f_low = func(low)
-    f_high = func(high)
-
     if not f_low:
         return low, False
+
+    f_high = func(high)
     if f_high:
         return high, True
 

@@ -13,6 +13,7 @@ Mathematical details: Appendix B of https://arxiv.org/abs/2504.10469
 """
 
 from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
 import scipy.linalg as la
@@ -51,6 +52,7 @@ class GCDHyperparameters:
     max_gcd_iter_num: int = 50
     gcd_iter_period: int = 5
     gcd_tol: float = 1e-2
+    verbose: int = 1
 
 
 def merge_lead_constraints(QCQP: _SharedProjQCQP, merged_num: int = 2) -> None:
