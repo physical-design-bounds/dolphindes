@@ -6,10 +6,15 @@ build:
   os: ubuntu-22.04
   tools:
     python: "3.12"
-  commands:
-    # Install your package and documentation dependencies
-    - pip install -e .
-    - pip install sphinx sphinx-rtd-theme sphinx-autodoc-typehints numpydoc
+
+# Use your conda environment
+conda:
+  environment: dolphindes.yml
+
+# Additional commands after conda environment is ready
+commands:
+  # Install your package in editable mode so autodoc can import it
+  - pip install -e .
 
 # Sphinx configuration
 sphinx:
