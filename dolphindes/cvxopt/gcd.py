@@ -11,6 +11,7 @@ For more mathematical details, see Appendix B of https://arxiv.org/abs/2504.1046
 """
 
 from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
 import scipy.linalg as la
@@ -37,10 +38,11 @@ class GCDHyperparameters:
 
     max_proj_cstrt_num: int = 10
     orthonormalize: bool = True
-    opt_params: dict | None = None
+    opt_params: dict[str, Any] | None = None
     max_gcd_iter_num: int = 50
     gcd_iter_period: int = 5
     gcd_tol: float = 1e-2
+    verbose: int = 1
 
 
 def merge_lead_constraints(QCQP: _SharedProjQCQP, merged_num: int = 2) -> None:
@@ -177,12 +179,6 @@ def add_constraints(
 def run_gcd(
     QCQP: _SharedProjQCQP,
     gcd_params: GCDHyperparameters = GCDHyperparameters(),
-    # max_proj_cstrt_num: int = 10,
-    # orthonormalize: bool = True,
-    # opt_params: dict | None = None,
-    # max_gcd_iter_num: int = 50,
-    # gcd_iter_period: int = 5,
-    # gcd_tol: float = 1e-2,
 ) -> None:
     """
     Perform generalized constraint descent to gradually refine dual bound on QCQP.
@@ -230,8 +226,8 @@ def run_gcd(
     opt_params = {**OPT_PARAMS_DEFAULTS, **opt_params}
 
     # get to feasible point
-    # TODO: revamp find_feasible_lags
-    QCQP.current_lags = QCQP.find_feasible_lags()
+    if QCQP.current_lags is None or not QCQP.is_dual_feasible(QCQP.current_lags):
+        QCQP.current_lags = QCQP.find_feasible_lags()
 
     orthonormalize = gcd_params.orthonormalize
     max_proj_cstrt_num = gcd_params.max_proj_cstrt_num
@@ -270,10 +266,11 @@ def run_gcd(
         QCQP.solve_current_dual_problem(
             "newton", init_lags=QCQP.current_lags, opt_params=opt_params
         )
-        print(
-            f"At GCD iteration #{gcd_iter_num}, best dual bound found is \
-            {QCQP.current_dual}."
-        )
+        if gcd_params.verbose >= 1:
+            print(
+                f"At GCD iteration #{gcd_iter_num}, best dual bound found is "
+                f"{QCQP.current_dual}."
+            )
 
         ## termination conditions
         if gcd_iter_num > max_gcd_iter_num:

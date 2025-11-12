@@ -8,8 +8,7 @@ implementations optimized for different matrix structures.
 
 __all__ = ["SparseSharedProjQCQP", "DenseSharedProjQCQP"]
 
-import copy
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import scipy.linalg as la
@@ -126,16 +125,15 @@ class SparseSharedProjQCQP(_SharedProjQCQP):
         )
 
     def __deepcopy__(self, memo: dict[int, Any]) -> "SparseSharedProjQCQP":
-        """Copy this instance."""
-        # custom __deepcopy__ because Acho is not pickle-able
-        new_QCQP = SparseSharedProjQCQP.__new__(SparseSharedProjQCQP)
-        for name, value in self.__dict__.items():
-            if name != "Acho":
-                setattr(new_QCQP, name, copy.deepcopy(value, memo))
-
-        new_QCQP._initialize_Acho()  # Recompute the Cholesky factorization.
-        # If dense, will use self.current_lags.
-        # TODO: update Acho with current_lags if applicable
+        try:
+            new_QCQP = cast("SparseSharedProjQCQP", super().__deepcopy__(memo))
+        except TypeError:
+            # autoreload (often used in notebooks) breaks inheritance detection
+            new_QCQP = cast(
+                "SparseSharedProjQCQP", _SharedProjQCQP.__deepcopy__(self, memo)
+            )
+        if getattr(new_QCQP, "_initialize_Acho", None) is not None:
+            new_QCQP._initialize_Acho()
         return new_QCQP
 
     def compute_precomputed_values(self) -> None:

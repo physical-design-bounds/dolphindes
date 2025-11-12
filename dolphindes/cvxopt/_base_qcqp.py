@@ -1,3 +1,4 @@
+import copy
 import warnings
 from abc import ABC, abstractmethod
 from collections import namedtuple
@@ -100,9 +101,6 @@ class _SharedProjQCQP(ABC):
         s_2j: list[ArrayLike] | None = None,
         c_2j: ArrayLike | None = None,
         verbose: int = 0,
-        strong_duality_checker: Callable[[ComplexArray, float], bool] | None = None,
-        A2dagger_inv_s0_func: Callable[[ComplexArray, ComplexArray], ComplexArray]
-        | None = None,
     ) -> None:
         if B_j is None:
             all_mat_sp = [sp.issparse(A0), sp.issparse(A1)]
@@ -193,11 +191,55 @@ class _SharedProjQCQP(ABC):
         self.current_xstar: Optional[ComplexArray] = None
         self.use_precomp = True
 
+        # Optional function callbacks
+        self.strong_duality_checker: Optional[
+            Callable[[ComplexArray, float], Tuple[float, bool]]
+        ] = None
+        # Optional PSD constraint projector (to re-append when needed)
+        self.psd_projector: Optional[SparseDense] = None
+
         if self.use_precomp:
             self.compute_precomputed_values()
 
-        self.strong_duality_checker = strong_duality_checker
-        self.A2dagger_inv_s0_func = A2dagger_inv_s0_func
+    def reinitialize_A_operators(
+        self,
+        A0: ArrayLike | sp.csc_array,
+        A1: ArrayLike | sp.csc_array,
+        A2: ArrayLike | sp.csc_array,
+    ) -> None:
+        """Replace the A0, A1, and A2 operators.
+
+        Only re-computes necessary quantities. Used in Verlan scheme.
+        """
+        existing_sparse = sp.issparse(self.A0)
+        incoming_sparse = sp.issparse(A0)
+        if existing_sparse != incoming_sparse:
+            raise ValueError("Reinitialization must preserve sparse/dense storage.")
+
+        if existing_sparse:
+            self.A0 = sp.csc_array(A0, dtype=complex)
+            self.A1 = sp.csc_array(A1, dtype=complex)
+        else:
+            self.A0 = np.asarray(A0, dtype=complex)
+            self.A1 = np.asarray(A1, dtype=complex)
+
+        self.A2 = (
+            sp.csc_array(A2, dtype=complex)
+            if sp.issparse(A2)
+            else np.asarray(A2, dtype=complex)
+        )
+
+        self.Acho = None
+        self.current_dual = None
+        self.current_grad = None
+        self.current_hess = None
+        self.current_lags = None
+        self.current_xstar = None
+
+        if self.use_precomp:
+            self.compute_precomputed_values()
+        elif hasattr(self, "_initialize_Acho"):
+            self._initialize_Acho()
 
     def compute_precomputed_values(self) -> None:
         """
@@ -356,7 +398,7 @@ class _SharedProjQCQP(ABC):
         pass
 
     def find_feasible_lags(
-        self, start: float = 0.1, limit: float = 1e8
+        self, start: float = 0.1, limit: float = 1e8, idx: int = 1
     ) -> FloatNDArray:
         """
         Heuristically find a dual feasible (PSD) set of Lagrange multipliers.
@@ -367,9 +409,11 @@ class _SharedProjQCQP(ABC):
         Parameters
         ----------
         start : float, default 0.1
-            Initial value assigned to lags[1] (must have ≥ 2 projector constraints).
+            Initial value assigned to lags[idx].
         limit : float, default 1e8
             Upper bound before giving up.
+        idx : int, default 1
+            Index of the projector constraint to scale.
 
         Returns
         -------
@@ -384,10 +428,10 @@ class _SharedProjQCQP(ABC):
         init_lags = np.random.random(self.n_proj_constr) * 1e-6
         init_lags = np.append(init_lags, len(self.B_j) * [0.0])
 
-        init_lags[1] = start
+        init_lags[idx] = start
         while self.is_dual_feasible(init_lags) is False:
-            init_lags[1] *= 1.5
-            if init_lags[1] > limit:
+            init_lags[idx] *= 1.5
+            if init_lags[idx] > limit:
                 raise ValueError(
                     "Could not find a feasible point for the dual problem."
                 )
@@ -978,7 +1022,9 @@ class _SharedProjQCQP(ABC):
                 result,
             )
 
-    def is_strongly_dual(self, xstar: ComplexArray, tol: float = 1e-3) -> bool:
+    def is_strongly_dual(
+        self, xstar: ComplexArray | None = None, tol: float = 1e-3
+    ) -> Tuple[float, bool]:
         """
         Check if strong duality holds for point xstar.
 
@@ -989,47 +1035,156 @@ class _SharedProjQCQP(ABC):
 
         Parameters
         ----------
-        xstar : ComplexArray
-            The point to check strong duality for.
+        xstar : ComplexArray | None
+            The point to check strong duality for. Defaults to current_xstar.
         tol : float, default 1e-3
             Tolerance for checking primal-dual gap.
 
         Returns
         -------
-        bool
-            True if strong duality holds for the given point.
-
-        Raises
-        ------
-        ValueError
-            If no strong duality checker is provided.
+        (violation, is_strong_dual) : tuple[float, bool]
+            violation is a nonnegative scalar (0 means satisfied).
+            is_strong_dual is True if violation < tol.
         """
+        if xstar is None:
+            assert self.current_xstar is not None, "No xstar provided or cached."
+            xstar = self.current_xstar
         if self.strong_duality_checker is not None:
             return self.strong_duality_checker(xstar, tol)
-        else:
-            raise ValueError(
-                "No strong duality checker provided for this QCQP instance."
-            )
+        warnings.warn(
+            "No strong duality checker provided for this QCQP instance; "
+            "returning (inf, False).",
+            UserWarning,
+        )
+        return np.inf, False
 
-    def compute_A2dagger_inv_s0(self) -> ComplexArray:
+    def set_strong_duality_checker(
+        self,
+        strong_duality_checker: Callable[[ComplexArray, float], Tuple[float, bool]]
+        | None,
+    ) -> None:
+        """Assign the optional strong duality checker callback."""
+        self.strong_duality_checker = strong_duality_checker
+
+    def get_A2_dagger_x(self, x: ComplexArray | None = None) -> ComplexArray:
+        """Compute A2^† x. Used in Verlan."""
+        if x is None:
+            assert self.current_xstar is not None, "No x provided or cached."
+            x = self.current_xstar
+        return cast(ComplexArray, self.A2.conj().T @ x)
+
+    def set_psd_projector(self, Ppsd: Optional[SparseDense]) -> None:
+        """Register an optional PSD projector to be appended on demand."""
+        self.psd_projector = Ppsd
+        self.current_grad = None
+        self.current_hess = None
+
+    def evaluate_projector_constraint(
+        self,
+        projector: SparseDense,
+        x: Optional[ComplexArray] = None,
+    ) -> float:
+        if x is None:
+            if self.current_lags is None:
+                raise ValueError(
+                    "No cached solution. Solve the QCQP or supply x explicitly."
+                )
+            if self.current_xstar is None:
+                self.current_xstar = self._get_xstar(self.current_lags)[0]
+            x = self.current_xstar
+        x = np.asarray(x, dtype=complex)
+
+        P = (
+            sp.csc_array(projector, dtype=complex)
+            if sp.issparse(projector)
+            else np.asarray(projector, dtype=complex)
+        )
+
+        y = self.A2 @ x
+        term1 = -np.vdot(x, self.A1 @ (P @ y))
+        term2 = 2 * np.vdot(x, self.A2.conj().T @ (P.conj().T @ self.s1))
+        return float(np.real(term1 + term2))
+
+    def add_single_constraint(self, projector: Optional[SparseDense] = None) -> int:
         """
-        Compute A2^†^{-1} s0 using the provided function if available.
+        Append a shared-projector constraint at the end of the projector list.
+
+        If projector is None, uses the previously registered self.psd_projector.
+        Updates Projectors, precomputed_As, Fs, and current_lags consistently.
 
         Returns
         -------
-        ComplexArray
-            The vector A2^†^{-1} s0.
-
-        Raises
-        ------
-        ValueError
-            If no A2dagger_inv_s0_func is provided.
+        int
+            The index at which the PSD constraint was appended. If the projector
+            already exists, returns the index of the existing projector.
         """
-        if self.A2dagger_inv_s0_func is not None:
-            return self.A2dagger_inv_s0_func(self.A2, self.s0)
-        warnings.warn(
-            "No A2dagger_inv_s0_func provided; using direct inversion (may be slow).",
-            UserWarning,
-        )
-        A2dagger_inv = spla.inv(self.A2.conj().T)
-        return cast(ComplexArray, A2dagger_inv @ self.s0)
+        # Resolve which projector to add
+        Pnew = projector if projector is not None else self.psd_projector
+        assert Pnew is not None, "No PSD projector provided or registered."
+
+        # Check if this projector already exists
+        existing_idx = self.Proj.find_index(Pnew)
+        if existing_idx is not None:
+            if self.verbose > 0:
+                warnings.warn(
+                    f"PSD projector already exists at index {existing_idx}. "
+                    "Not adding duplicate.",
+                    UserWarning,
+                )
+            return existing_idx
+
+        old_P = self.n_proj_constr  # current count of projector constraints
+
+        # Append to Projectors first
+        self.Proj.append(Pnew)
+        self.n_proj_constr = len(self.Proj)
+
+        # Update precomputed_As: insert the new projector block before general blocks
+        Ak = Sym(self.A1 @ self.Proj[old_P] @ self.A2)
+        if hasattr(self, "precomputed_As"):
+            self.precomputed_As.insert(old_P, Ak)
+
+        # Update Fs: grow by one column in the projector block
+        if hasattr(self, "Fs"):
+            m = self.Fs.shape[0]
+            new_cols = self.n_proj_constr + self.n_gen_constr
+            Fs_new = np.zeros((m, new_cols), dtype=complex)
+            # copy previous projector + general columns with shift
+            if old_P > 0:
+                Fs_new[:, :old_P] = self.Fs[:, :old_P]
+            # compute new projector column: A2^H P^H s1
+            Fs_new[:, old_P] = self.A2.conj().T @ (self.Proj[old_P].conj().T @ self.s1)
+            # copy old general columns to the tail unchanged
+            if self.n_gen_constr > 0:
+                Fs_new[:, self.n_proj_constr :] = self.Fs[:, old_P:]
+            self.Fs = Fs_new
+
+        # Expand current_lags by inserting a zero at the new projector position
+        if self.current_lags is not None:
+            new_lags = np.zeros(self.n_proj_constr + self.n_gen_constr, dtype=float)
+            if old_P > 0:
+                new_lags[:old_P] = self.current_lags[:old_P]
+            # zero for the new PSD constraint
+            if self.n_gen_constr > 0:
+                new_lags[self.n_proj_constr :] = self.current_lags[old_P:]
+            self.current_lags = new_lags
+
+        # Invalidate cached derivatives
+        self.current_grad = None
+        self.current_hess = None
+
+        return old_P
+
+    def __deepcopy__(self, memo: dict[int, Any]) -> "_SharedProjQCQP":
+        cls = self.__class__
+        new_obj = cls.__new__(cls)
+        memo[id(self)] = new_obj
+        for name, value in self.__dict__.items():
+            if name == "Acho":
+                try:
+                    setattr(new_obj, name, copy.deepcopy(value, memo))
+                except Exception:
+                    setattr(new_obj, name, None)
+            else:
+                setattr(new_obj, name, copy.deepcopy(value, memo))
+        return new_obj

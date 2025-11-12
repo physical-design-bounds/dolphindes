@@ -1,13 +1,14 @@
 """Routines for optimization."""
 
 from . import gcd
-from .gcd import GCDHyperparameters
 from ._base_qcqp import _SharedProjQCQP
+from .gcd import GCDHyperparameters
 from .optimization import BFGS, Alt_Newton_GD
 from .qcqp import (
     DenseSharedProjQCQP,
     SparseSharedProjQCQP,
 )
+from .verlan import VerlanHyperparameters, run_verlan
 
 __all__ = [
     "_SharedProjQCQP",
@@ -17,4 +18,6 @@ __all__ = [
     "Alt_Newton_GD",
     "gcd",
     "GCDHyperparameters",
+    "run_verlan",
+    "VerlanHyperparameters",
 ]

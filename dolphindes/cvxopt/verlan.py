@@ -1,31 +1,19 @@
-"""Computer structures using Verlan algorithm."""
+"""Compute initializations for QCQPs using Verlan algorithm with scraping.
+
+See https://arxiv.org/abs/2504.14083 for mathematical details.
+"""
 
 import copy
 from dataclasses import dataclass
-from typing import Callable, Tuple, cast
+from typing import Callable, Tuple
 
-import numpy as np
+import scipy.sparse as sp
 
-from dolphindes.cvxopt import GCDHyperparameters, gcd
+from dolphindes.cvxopt import GCDHyperparameters
 from dolphindes.cvxopt._base_qcqp import _SharedProjQCQP
 from dolphindes.types import ComplexArray
-from dolphindes.util import math_utils
+from dolphindes.util import math_utils, print_underline
 
-# write a is_strongly_dual function for QCQPs. This must be overriden in general - can't do it generally.
-# write a function to compute A2inv^dagger s0 for QCQPs. Abstract method. For photonics, override it with the answer.
-# For dense, A2 will be identity, so just return s0.
-
-# Plan:
-# 1. I want verlan code that works on just QCQPs, but this is hard for multiple reasons:
-#    a. I need a function that takes a QCQP and returns True if it is strongly dual
-#    b. I need A2inv^dagger s0, but I don't want to invert A2 inside QCQP unless absolutely necessary
-#       Maybe I can have a function that does this in QCQP, and you can override it if you know it?
-# 2. So instead I will write a general verlan scheme that works for QCQPs, but leaves some things not implemented.
-#    Then I will subclass it for Photonics and implement the missing pieces.
-# 3. Hopefully this means Sean or the others can use it for other problems too, such as subset sum.
-
-# So what are the components?
-# First,
 
 @dataclass(frozen=True)
 class VerlanHyperparameters:
@@ -38,8 +26,6 @@ class VerlanHyperparameters:
         More options may be added in the future.
     delta : float
         Tolerance for checking strong duality. Default is 1e-3.
-    loss_peak : float
-        Peak loss (imaginary part of chi) at t = 0.5. Default is 0.1.
     max_iter : int | float
         Maximum number of Verlan iterations to perform. Default is np.inf.
     theta : float
@@ -50,199 +36,259 @@ class VerlanHyperparameters:
         the algorithm reduces delta_t and retries.
     delta_t : float
         Starting step size to increase t when strong duality is found.
+    min_delta_t: float
+        Minimum step size to increase t when strong duality is found.
+    delta_t_growth_factor : float
+        Multiplicative factor to restore delta_t after successful iterations.
+    max_verlan_iters : int
+        Maximum number of Verlan iterations before giving up.
+    verbose : float
+        Verbosity level, either 0 (silent), 1 (Verlan prints only), or
+        2 (Verlan + solve prints)
     """
 
     method: str = "gcd"
+    sd_search_tol: float = 0.1
     delta: float = 1e-3
-    loss_peak: float = 0.1
-    max_iter: int | float = np.inf
     theta: float = 5.0  # degrees
     n_theta: int = 10
     delta_t: float = 0.1
+    t_low: float = 1e-5
+    t_high: float = 0.9
+    min_delta_t: float = 1e-6
+    delta_t_growth_factor: float = 1.5
+    max_verlan_iters: int = 50
     gcd_params: GCDHyperparameters = GCDHyperparameters()
+    verbose: float = 1.0
+
+
+def _single_solve(
+    QCQP: _SharedProjQCQP,
+    gcd_params: GCDHyperparameters,
+    t: float,
+    At: Callable[
+        [float],
+        Tuple[
+            ComplexArray | sp.csc_array,
+            ComplexArray | sp.csc_array,
+            ComplexArray | sp.csc_array,
+        ],
+    ],
+) -> None:
+    A0, A1, A2 = At(t)
+
+    # Preserve a previously feasible warm-start if it still works after reinit
+    prev_lags = QCQP.current_lags
+    QCQP.reinitialize_A_operators(A0, A1, A2)
+
+    # Helper to add PSD constraint if needed
+    if prev_lags is not None and QCQP.is_dual_feasible(prev_lags):
+        QCQP.current_lags = prev_lags
+    else:
+        psd_idx = QCQP.add_single_constraint(None)
+        QCQP.current_lags = QCQP.find_feasible_lags(idx=psd_idx)
+
+    QCQP.run_gcd(gcd_params)
+
+
+def scrape(QCQP: _SharedProjQCQP, theta: float) -> None:
+    """Based on an existing solve, rotate the objective s0 towards xstar."""
+    A2dagger_xstar = QCQP.get_A2_dagger_x(QCQP.current_xstar)
+    QCQP.s0 = math_utils.rotate_toward(QCQP.s0, A2dagger_xstar, theta)
 
 
 def run_verlan(
-    s0: ComplexArray,
     QCQP: "_SharedProjQCQP",
+    At: Callable[
+        [float],
+        Tuple[
+            ComplexArray | sp.csc_array,
+            ComplexArray | sp.csc_array,
+            ComplexArray | sp.csc_array,
+        ],
+    ],
     verlan_params: VerlanHyperparameters = VerlanHyperparameters(),
-    At,
-):
-    norm_s0 = float(np.linalg.norm(s0))
-    return norm_s0
-    
-def _single_solve(
-    QCQP: _SharedProjQCQP,
-    t: float,
-    At: Callable
-):
-    pass
+) -> "_SharedProjQCQP":
+    assert QCQP is not None, "QCQP must be initialized to run verlan."
+    assert QCQP.is_strongly_dual is not None, (
+        "QCQP must have strong duality checker defined."
+    )
+    tmp_QCQP = copy.deepcopy(QCQP)
 
-class VerlanProblem:
-    def __init__(
-        self, PhotonicProblem, verlan_params: VerlanHyperparameters
-    ) -> None:
-        self.PhotonicProblem = copy.deepcopy(PhotonicProblem)
+    gcd_params = verlan_params.gcd_params
+    verlan_tol = verlan_params.delta
 
-        self.dense_s0, self.norm_dense_s0 = self._get_dense_s0()
-        self.dense_s0_original = self.dense_s0.copy()
-        self.chi_original = copy.copy(self.PhotonicProblem.chi)
-        self.params = verlan_params
-        self.current_t = 1
+    _single_solve(tmp_QCQP, gcd_params, t=1.0, At=At)
+    viol, SD = tmp_QCQP.is_strongly_dual(tmp_QCQP.current_xstar, verlan_tol)
+    current_t = 1.0
+    current_sd = SD
+    current_delta_t = verlan_params.delta_t
+    initial_delta_t = verlan_params.delta_t
+    growth_factor = verlan_params.delta_t_growth_factor
+    if SD:
+        if verlan_params.verbose >= 1:
+            print("Original problem is strongly dual! Done.")
+        return tmp_QCQP
+    if verlan_params.verbose >= 1:
+        print("Original problem is not strongly dual. Violation: ", viol)
 
-    def _get_chi_t(self, t: float, loss_peak: float) -> complex:
-        """Get chi at interpolation parameter t.
+    def check_strong_duality_wrapper(
+        some_QCQP: "_SharedProjQCQP", t_val: float
+    ) -> bool:
+        nonlocal current_t, current_sd, viol
+        _single_solve(some_QCQP, gcd_params, t_val, At)
+        viol_check, sd_local = some_QCQP.is_strongly_dual(
+            some_QCQP.current_xstar, tol=verlan_tol
+        )
+        if sd_local:
+            viol = viol_check
+        if verlan_params.verbose >= 1:
+            print(f"t = {t_val:.3e}, SD Violation = {viol_check:.3e}.")
+        current_t = t_val
+        current_sd = sd_local
+        return sd_local
 
-        t = 0 -> chi = 0
-        t = 1 -> chi = chi_original
-        chi(t) is a quadratic function of t such that Im(chi) has a peak
-        at t = 0.5 of height loss_peak.
-        """
-        real_chi = t * np.real(self.chi_original)
-        imag_chi = (2 * np.imag(self.chi_original) - 4 * loss_peak) * (t**2) + (
-            4 * loss_peak - np.imag(self.chi_original)
-        ) * t
-        return complex(real_chi, imag_chi)
+    # Step 1: find initial t with strong duality
+    if verlan_params.verbose >= 1:
+        print_underline("Finding t such that small problem is strongly dual...")
+    t_low = verlan_params.t_low
+    t_high = verlan_params.t_high
+    t_SD, success = math_utils.bool_binary_search(
+        func=lambda t_val: check_strong_duality_wrapper(tmp_QCQP, t_val),
+        low=t_low,
+        high=t_high,
+        tol=verlan_params.sd_search_tol,
+    )
+    assert success, (
+        "Failed! That shouldn't happen. Increase amount of loss in A(t) / lower t_low."
+    )
+    if verlan_params.verbose >= 1:
+        print(f"Found t_SD ≈ {t_SD:.3e} with strong duality. Violation: {viol:.3e}")
+        print_underline("Starting Verlan iterations...")
 
-    def _set_chi(self, chi: complex) -> None:
-        self.PhotonicProblem.chi = chi
-        self.PhotonicProblem.setup_QCQP()
+    check_strong_duality_wrapper(tmp_QCQP, t_SD)
+    SD_QCQP = copy.deepcopy(tmp_QCQP)
 
-    def check_strong_duality(self, delta: float) -> bool:
-        """Check if strong duality holds for the photonic problem for given tolerance.
+    # Step 2: Verlan iterations
+    # Scrape and increase t until t=1 with strong duality
+    verlan_iter = 0
+    # Track how many times we've hit min delta_t at the same t
+    last_t_min_marker = None
+    min_at_t_hits = 0
 
-        Arguments
-        ---------
-        delta : float
-            Tolerance for checking if the compact constraint gradient is zero.
+    while True:
+        # 2.1: Check for convergence
+        if current_t >= 1.0 and current_sd:
+            if verlan_params.verbose >= 1:
+                print("Reached t = 1 with strong duality.")
+            break
+        if verlan_iter >= verlan_params.max_verlan_iters:
+            if verlan_params.verbose >= 1:
+                print("Reached maximum Verlan iterations without t = 1 strong duality.")
+            break
 
-        Returns
-        -------
-        bool
-            True if strong duality holds within tolerance delta.
+        prev_viol = viol
+        prev_sd = current_sd
 
-        Notes
-        -----
-        In photonics, this is true if the compact constraint
-            Asym[p† (chi^-† - G_0†)^{-1} p - 2 Re (p† s0)] = 0
-        where s0 is the linear objective parameter.
-        We assume that this is index 1 of the QCQP so we can just check
-        its gradient.
-        """
-        gradient = self.PhotonicProblem.QCQP.current_grad
-        if gradient is None:
-            raise ValueError("QCQP has not been solved yet.")
-        compact_gradient = gradient[1]
-        return bool(np.linalg.norm(compact_gradient) < delta)
-
-    def _single_solve(
-        self,
-        PhotonicProblem: Photonics_FDFD,
-        t: float,
-    ) -> None:
-        """Solve the photonic problem at interpolation parameter t.
-
-        Modifies the PhotonicProblem and PhotonicProblem.QCQP in place.
-        """
-        PhotonicProblem.chi = self._get_chi_t(t, self.params.loss_peak)
-        PhotonicProblem.setup_QCQP()
-        if self.params.method == "gcd":
-            gcd.run_gcd(PhotonicProblem.QCQP, self.params.gcd_params)
+        if not current_sd:
+            # If not strongly dual, attempt scraping n_theta times until strong duality.
+            pre_scrape_QCQP = copy.deepcopy(tmp_QCQP)
+            scraped_success = False
+            for scrape_attempt in range(verlan_params.n_theta):
+                scrape(tmp_QCQP, verlan_params.theta)
+                sd_found = check_strong_duality_wrapper(tmp_QCQP, current_t)
+                if sd_found:
+                    scraped_success = True
+                    SD_QCQP = tmp_QCQP
+                    if verlan_params.verbose >= 1:
+                        print(
+                            f"Found strong duality after {scrape_attempt + 1} "
+                            f"attempt(s)."
+                        )
+                    break
+            if not scraped_success:
+                if verlan_params.verbose >= 1:
+                    print(
+                        f"  Failed to find strong duality after "
+                        f"{verlan_params.n_theta} scraping attempts."
+                    )
+                tmp_QCQP = pre_scrape_QCQP
+                current_sd = prev_sd
+                viol = prev_viol
+                current_delta_t = max(current_delta_t * 0.5, verlan_params.min_delta_t)
+                if verlan_params.verbose >= 1:
+                    print(f"Reducing delta_t to {current_delta_t:.3e}.")
+                # If we've hit the minimum delta_t twice at this t, give up.
+                if current_delta_t == verlan_params.min_delta_t:
+                    if last_t_min_marker == current_t:
+                        min_at_t_hits += 1
+                    else:
+                        last_t_min_marker = current_t
+                        min_at_t_hits = 1
+                    if min_at_t_hits >= 2:
+                        if verlan_params.verbose >= 1:
+                            print(
+                                f"delta_t hit minimum twice at t = {current_t:.3e}; giving up."
+                            )
+                        break
+                continue
+            else:
+                if verlan_params.verbose >= 1:
+                    print("Scraped successfully to strong duality.")
+                    print(f"Current t = {current_t:.3e}, violation = {viol:.3e}.")
         else:
-            raise ValueError(f"Unknown Verlan method {self.params.method}.")
-        return
+            scraped_success = True
 
-    # def find_initial_strongly_dual_point(self, PhotonicProblem: Photonics_FDFD, strategy: str = "binary_search") -> None:
-    #     """Attempt to find the biggest 0 < t < 1 such that strong duality holds."""
-    #     pass
+        pre_increase_QCQP = copy.deepcopy(tmp_QCQP)
+        prev_t = current_t
+        prev_viol = viol
+        prev_sd = current_sd
+        t_new = min(current_t + current_delta_t, 1.0)
+        sd_after_increase = check_strong_duality_wrapper(tmp_QCQP, t_new)
+        if not sd_after_increase:
+            if verlan_params.verbose >= 1:
+                print(f"Failed to keep strong duality at t = {t_new:.3e}.")
+            tmp_QCQP = pre_increase_QCQP
+            current_t = prev_t
+            current_sd = prev_sd
+            viol = prev_viol
+            current_delta_t = max(current_delta_t * 0.5, verlan_params.min_delta_t)
+            if verlan_params.verbose >= 1:
+                print(f"Reducing delta_t to {current_delta_t:.3e}.")
+            # If we've hit the minimum delta_t twice at this t, give up.
+            if current_delta_t == verlan_params.min_delta_t:
+                if last_t_min_marker == current_t:
+                    min_at_t_hits += 1
+                else:
+                    last_t_min_marker = current_t
+                    min_at_t_hits = 1
+                if min_at_t_hits >= 2:
+                    if verlan_params.verbose >= 1:
+                        print(
+                            f"delta_t hit minimum twice at t = {current_t:.3e}; giving up."
+                        )
+                    break
+            continue
+        else:
+            SD_QCQP = copy.deepcopy(tmp_QCQP)
+            if current_delta_t < initial_delta_t:
+                increased_delta_t = min(
+                    current_delta_t * growth_factor, initial_delta_t
+                )
+                if verlan_params.verbose >= 1:
+                    print(f"Increasing delta_t to {increased_delta_t:.3e}.")
+                current_delta_t = increased_delta_t
+            # Successful t increase; moving t resets the per-t minimum-hit logic.
+            last_t_min_marker = current_t
+            min_at_t_hits = 0
 
-    # def _scrape(self, PhotonicProblem: Photonics_FDFD, theta: float) -> Photonics_FDFD:
-    #     """Based on an existing solve, rotate the objective s0 towards xstar.
+        verlan_iter += 1
+        if verlan_params.verbose >= 1:
+            print(
+                f"Verlan iteration {verlan_iter}: Successfully increased t to {t_new:.3e}. "
+                f"Violation: {viol:.3e}."
+            )
+        print()
 
-    #     Arguments
-    #     ---------
-    #     theta : float
-    #         Angle in degrees to rotate s0 towards xstar.
-    #     PhotonicProblem : Photonics_FDFD
-    #         The photonic problem to modify.
-
-    #     Notes
-    #     -----
-    #     This modifies self.dense_s0 and updates the PhotonicProblem objective.
-    #     """
-    #     xstar = PhotonicProblem.QCQP.current_xstar
-    #     if xstar is None:
-    #         raise ValueError("QCQP has not been solved yet.")
-
-    #     # If the problem is sparse, convert xstar to dense
-    #     if PhotonicProblem.sparseQCQP:
-    #         xstar = PhotonicProblem.Ginv @ xstar
-
-    #     # Rescale xstar to have the same norm as s0
-    #     # Rotate xstar towards s0 by angle theta
-    #     xstar = xstar * self.norm_dense_s0 / np.linalg.norm(xstar)
-    #     s0_rotated = math_utils.rotate_toward(PhotonicProblem.dense_s0, xstar, theta)
-    #     if PhotonicProblem.sparseQCQP:
-    #         PhotonicProblem.set_objective(s0=s0_rotated, denseToSparse=True)
-    #     else:
-    #         PhotonicProblem.set_objective(s0=s0_rotated, denseToSparse=False)
-    #     PhotonicProblem.setup_QCQP()
-    #     return PhotonicProblem
-
-    # def _scrape_until_strong_duality(
-    #     self, PhotonicProblem: Photonics_FDFD, theta: float
-    # ) -> Tuple[Photonics_FDFD, bool]:
-    #     """Scrape the objective until strong duality is found.
-
-    #     Arguments
-    #     ---------
-    #     PhotonicProblem : Photonics_FDFD
-    #         The photonic problem to modify.
-    #     theta : float
-    #         Angle in degrees to rotate s0 towards xstar during scraping.
-
-    #     Returns
-    #     -------
-    #     Photonic_FDFD
-    #         The modified photonic problem after scraping.
-    #     bool
-    #         True if strong duality is found, False otherwise.
-
-    #     Notes
-    #     -----
-    #     Terminates if
-    #     1. Strong duality is found
-    #     2. n_theta attempts are made without finding strong duality
-    #     3. xstar has converged without finding strong duality
-    #     """
-    #     return PhotonicProblem, False
-
-    # def verlan_iteration(self) -> None:
-    #     """Perform a single iteration of the Verlan algorithm.
-
-    #     This is a single increase in t followed by scraping until strong duality is found.
-    #     If strong duality is not found in enough scraping attempts, the function returns without modifying t or s0.
-    #     """
-    #     pass
-
-    # def verlan_run(self) -> None:
-    #     """Run Verlan algorithm until strong duality is found with t=1.
-
-    #     Arguments
-    #     ---------
-
-    #     Notes
-    #     -----
-    #     This modifies self.current_t, self.dense_s0, and the PhotonicProblem chi.
-    #     """
-    #     # 1. Use binary search to find initial t with strong duality
-    #     t = self.find_initial_strongly_dual_point(strategy="binary_search")
-
-    #     # 2. Verlan iterations
-    #     verlan_iter = 0
-    #     success = True
-    #     failure_counter = 0
-    #     t_new = t
-    #     delta_t = self.params.delta_t
-    #     n_theta = self.params.n_theta
-    #     delta = self.params.delta
+    # Finally, return with QCQP solved at t=1 (or best strongly dual solution reached)
+    return SD_QCQP
