@@ -3,16 +3,17 @@ version: 2
 # Build environment
 build:
   os: ubuntu-22.04
-  # This command satisfies the validator without
-  # interfering with the conda build.
-  commands:
-    - "/bin/true"
+  # We MUST have the 'tools' key to pass validation.
+  # But it must be EMPTY to avoid conflict with 'conda:'.
+  tools: {} 
 
 # Use your conda environment file
 conda:
   environment: dolphindes.yml
 
 # Sphinx configuration
+# Now that 'build.commands' is gone,
+# this 'sphinx:' key will be used.
 sphinx:
   configuration: docs/conf.py
 
