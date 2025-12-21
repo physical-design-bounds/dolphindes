@@ -295,7 +295,20 @@ class Photonics_FDFD(ABC):
         c0: Optional[float] = None,
         denseToSparse: bool = False,
     ) -> None:
-        """Set the QCQP objective function parameters."""
+        """
+        Set QCQP objective parameters.
+
+        Parameters
+        ----------
+        A0 : ndarray or csc_array, optional
+            Objective quadratic matrix.
+        s0 : ndarray of complex, optional
+            Objective linear vector.
+        c0 : float, optional
+            Objective constant.
+        denseToSparse : bool, optional
+            Convert dense to sparse representation. Default: False
+        """
         if denseToSparse:
             if not self.sparseQCQP:
                 raise ValueError(
@@ -321,7 +334,21 @@ class Photonics_FDFD(ABC):
     def get_ei(
         self, ji: Optional[ComplexGrid] = None, update: bool = False
     ) -> ComplexArray:
-        """Get or compute the incident electromagnetic field."""
+        """
+        Return the incident field.
+
+        Parameters
+        ----------
+        ji : ndarray of complex, optional
+            Current source.
+        update : bool, optional
+            Whether to update stored incident field. Default: False
+
+        Returns
+        -------
+        ndarray of complex
+            Incident electromagnetic field.
+        """
         assert self.EM_solver is not None
         ei: ComplexArray
         if self.ei is None:
@@ -489,7 +516,25 @@ class Photonics_FDFD(ABC):
         init_lags: Optional[FloatNDArray] = None,
         opt_params: Optional[dict[str, Any]] = None,
     ) -> Tuple[float, FloatNDArray, FloatNDArray, Optional[FloatNDArray], ComplexArray]:
-        """Delegate to bound_QCQP."""
+        """
+        Delegate to bound_QCQP so callers can use a uniform method name.
+
+        Subclasses only need to implement bound_QCQP.
+
+        Parameters
+        ----------
+        method : str, optional
+            Optimization method. Default: 'bfgs'
+        init_lags : ndarray of float, optional
+            Initial Lagrange multipliers.
+        opt_params : dict, optional
+            Optimization parameters.
+
+        Returns
+        -------
+        tuple
+            (dual_value, lagrange_multipliers, gradient, hessian, primal_variable)
+        """
         return self.bound_QCQP(
             method=method, init_lags=init_lags, opt_params=opt_params
         )
