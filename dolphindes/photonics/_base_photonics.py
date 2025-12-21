@@ -5,12 +5,22 @@ This module contains abstract base classes and geometry specifications that
 are inherited by concrete photonics solver implementations.
 """
 
+__all__ = [
+    "GeometryHyperparameters",
+    "CartesianFDFDGeometry",
+    "PolarFDFDGeometry",
+    "Photonics_FDFD",
+]
+
 import copy
+import warnings
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any, Optional, Tuple, Union
 
+import numpy as np
 import scipy.sparse as sp
+from numpy.typing import NDArray
 
 from dolphindes.cvxopt import DenseSharedProjQCQP, SparseSharedProjQCQP
 from dolphindes.types import BoolGrid, ComplexArray, ComplexGrid, FloatNDArray
@@ -81,6 +91,56 @@ class CartesianFDFDGeometry(GeometryHyperparameters):
         return (self.Nx, self.Ny)
 
 
+@dataclass
+class PolarFDFDGeometry(GeometryHyperparameters):
+    """
+    Polar FDFD geometry specification.
+
+    Attributes
+    ----------
+    Nphi : int
+        Number of azimuthal grid points (in one sector if using symmetry).
+    Nr : int
+        Number of radial grid points.
+    Npml : int
+        Number of radial PML layers.
+    dr : float
+        Radial grid spacing.
+    n_sectors : int
+        Number of rotational symmetry sectors (1 for full circle).
+        Default: 1
+    bloch_phase : float
+        Phase shift for Bloch-periodic boundary conditions in azimuthal direction.
+        Default: 0.0
+    m : int
+        PML polynomial grading order.
+        Default: 3
+    lnR : float
+        Logarithm of desired PML reflection coefficient.
+        Default: -20.0
+    """
+
+    Nphi: int
+    Nr: int
+    Npml: int
+    dr: float
+    n_sectors: int = 1
+    bloch_phase: float = 0.0
+    m: int = 3
+    lnR: float = -20.0
+
+    def get_grid_size(self) -> Tuple[int, int]:
+        """
+        Return grid dimensions.
+
+        Returns
+        -------
+        tuple of int
+            Grid dimensions (Nr, Nphi).
+        """
+        return (self.Nr, self.Nphi)
+
+
 class Photonics_FDFD(ABC):
     """
     Mother class for frequency domain problems with finite difference discretization.
@@ -122,6 +182,10 @@ class Photonics_FDFD(ABC):
     QCQP : SparseSharedProjQCQP or DenseSharedProjQCQP or None
         The QCQP instance for optimization.
     """
+
+    # "C" for Cartesian, "F" for Polar
+    # Because of the solver conventions.
+    _flatten_order: str = "C"
 
     def __init__(
         self,
@@ -187,6 +251,14 @@ class Photonics_FDFD(ABC):
         self.Pdiags = Pdiags
         self.QCQP: Optional[Union[SparseSharedProjQCQP, DenseSharedProjQCQP]] = None
 
+        self.Ginv: Optional[sp.csc_array] = None
+        self.G: Optional[ComplexArray] = None
+        self.M: Optional[sp.csc_array] = None
+        self.EM_solver: Optional[Any] = None
+        self.Ndes: Optional[int] = None
+        self.Plist: Optional[list] = None
+        self.dense_s0: Optional[ComplexArray] = None
+
     def __deepcopy__(self, memo: dict[Any, Any]) -> "Photonics_FDFD":
         """
         Deep copy this instance.
@@ -211,7 +283,11 @@ class Photonics_FDFD(ABC):
                 setattr(new, k, v)  # fallback to reference
         return new
 
-    @abstractmethod
+    def _get_des_mask_flat(self) -> BoolGrid:
+        """Get flattened design mask in appropriate order for this geometry."""
+        assert self.des_mask is not None
+        return self.des_mask.flatten(order=self._flatten_order)
+
     def set_objective(
         self,
         A0: Optional[Union[ComplexArray, sp.csc_array]] = None,
@@ -219,89 +295,139 @@ class Photonics_FDFD(ABC):
         c0: Optional[float] = None,
         denseToSparse: bool = False,
     ) -> None:
-        """
-        Set QCQP objective parameters.
+        """Set the QCQP objective function parameters."""
+        if denseToSparse:
+            if not self.sparseQCQP:
+                raise ValueError(
+                    "sparseQCQP needs to be True to use dense-to-sparse conversion."
+                )
+            if A0 is not None:
+                assert self.Ginv is not None
+                self.A0 = self.Ginv.T.conj() @ sp.csc_array(A0) @ self.Ginv
+            if s0 is not None:
+                assert self.Ginv is not None
+                self.dense_s0 = s0
+                self.s0 = self.Ginv.T.conj() @ s0
+        else:
+            if A0 is not None:
+                self.A0 = A0
+            if s0 is not None:
+                self.s0 = s0
+                self.dense_s0 = None
 
-        Parameters
-        ----------
-        A0 : ndarray or csc_array, optional
-            Objective quadratic matrix.
-        s0 : ndarray of complex, optional
-            Objective linear vector.
-        c0 : float, optional
-            Objective constant.
-        denseToSparse : bool, optional
-            Convert dense to sparse representation. Default: False
-        """
-        raise NotImplementedError
+        if c0 is not None:
+            self.c0 = c0
 
-    @abstractmethod
-    def setup_EM_solver(
-        self, geometry: Optional[GeometryHyperparameters] = None
-    ) -> None:
-        """
-        Initialize EM solver.
-
-        Parameters
-        ----------
-        geometry : GeometryHyperparameters, optional
-            Geometry specification.
-        """
-        raise NotImplementedError
-
-    @abstractmethod
-    def setup_EM_operators(self) -> None:
-        """Build EM operators (G/Ginv, M, etc.)."""
-        raise NotImplementedError
-
-    @abstractmethod
     def get_ei(
         self, ji: Optional[ComplexGrid] = None, update: bool = False
-    ) -> ComplexGrid:
-        """
-        Return the incident field.
+    ) -> ComplexArray:
+        """Get or compute the incident electromagnetic field."""
+        assert self.EM_solver is not None
+        ei: ComplexArray
+        if self.ei is None:
+            assert ji is not None or self.ji is not None, (
+                "Either ji argument or self.ji must be specified to compute ei."
+            )
+            source = ji if ji is not None else self.ji
+            ei = self.EM_solver.get_TM_field(source, self.chi_background)
+        else:
+            ei = self.ei
+        if update:
+            self.ei = ei
+        return ei
 
-        Parameters
-        ----------
-        ji : ndarray of complex, optional
-            Current source.
-        update : bool, optional
-            Whether to update stored incident field. Default: False
+    def set_ei(self, ei: ComplexArray) -> None:
+        """Set the incident electromagnetic field."""
+        self.ei = ei
 
-        Returns
-        -------
-        ndarray of complex
-            Incident electromagnetic field.
-        """
-        raise NotImplementedError
-
-    @abstractmethod
-    def set_ei(self, ei: ComplexGrid) -> None:
-        """
-        Set the incident field.
-
-        Parameters
-        ----------
-        ei : ndarray of complex
-            Incident electromagnetic field to store.
-        """
-        raise NotImplementedError
-
-    @abstractmethod
     def setup_QCQP(self, Pdiags: str = "global", verbose: float = 0) -> None:
         """
-        Construct the QCQP instance for the current configuration.
+        Set up the quadratically constrained quadratic programming (QCQP) problem.
 
         Parameters
         ----------
-        Pdiags : str, optional
-            Projector specification. Default: "global"
+        Pdiags : str or ndarray, optional
+            Specification for projection matrix diagonals. If "global", creates
+            global projectors with ones and -1j entries. Default: "global"
         verbose : float, optional
-            Verbosity level. Default: 0
-        """
-        raise NotImplementedError
+            Verbosity level for debugging output. Default: 0
 
-    @abstractmethod
+        Notes
+        -----
+        For sparse QCQP, creates SparseSharedProjQCQP with transformed matrices.
+        For dense QCQP, creates DenseSharedProjQCQP with original matrices.
+
+        Raises
+        ------
+        AttributeError
+            If required attributes (des_mask, A0, s0, c0) are not defined.
+        ValueError
+            If neither ji nor ei is specified, or if Pdiags specification is invalid.
+        """
+        from dolphindes.util import check_attributes
+
+        check_attributes(self, "des_mask", "A0", "s0", "c0")
+
+        assert self.des_mask is not None
+        self.Ndes = int(np.sum(self.des_mask))
+        des_mask_flat = self._get_des_mask_flat()
+
+        if (self.ji is None) and (self.ei is None):
+            raise AttributeError("an initial current ji or field ei must be specified.")
+        if self.ji is not None and self.ei is not None:
+            warnings.warn("If both ji and ei are specified then ji is ignored.")
+
+        self.get_ei(self.ji, update=True)
+
+        if Pdiags == "global":
+            I = sp.eye_array(self.Ndes, dtype=complex, format="csc")
+            self.Plist = [I, (-1j) * I]
+        else:
+            raise ValueError("Not a valid Pdiags specification / needs implementation")
+
+        assert self.chi is not None
+        assert self.ei is not None
+
+        ei_des = self.ei.flatten(order=self._flatten_order)[des_mask_flat]
+
+        if self.sparseQCQP:
+            if (self.Ginv is None) or (self.M is None):
+                self.setup_EM_operators()
+
+            assert self.Ginv is not None
+            A1_sparse = sp.csc_array(
+                np.conj(1.0 / self.chi) * self.Ginv.conj().T - sp.eye(self.Ndes)
+            )
+            A2_sparse = sp.csc_array(self.Ginv)
+
+            self.QCQP = SparseSharedProjQCQP(
+                self.A0,
+                self.s0,
+                self.c0,
+                A1_sparse,
+                A2_sparse,
+                ei_des / 2,
+                self.Plist,
+                verbose=int(verbose),
+            )
+        else:
+            if self.G is None:
+                self.setup_EM_operators()
+
+            assert self.G is not None
+            A1_dense = (
+                np.conj(1.0 / self.chi) * np.eye(self.G.shape[0]) - self.G.conj().T
+            )
+            self.QCQP = DenseSharedProjQCQP(
+                self.A0,
+                self.s0,
+                self.c0,
+                A1_dense,
+                ei_des / 2,
+                self.Plist,
+                verbose=int(verbose),
+            )
+
     def bound_QCQP(
         self,
         method: str = "bfgs",
@@ -325,19 +451,37 @@ class Photonics_FDFD(ABC):
         tuple
             (dual_value, lagrange_multipliers, gradient, hessian, primal_variable)
         """
-        raise NotImplementedError
+        assert self.QCQP is not None
+        return self.QCQP.solve_current_dual_problem(
+            method=method, init_lags=init_lags, opt_params=opt_params
+        )
 
-    @abstractmethod
     def get_chi_inf(self) -> ComplexArray:
-        """
-        Compute inferred chi from the QCQP dual solution.
+        """Get the inferred susceptibility from the QCQP dual solution."""
+        assert hasattr(self, "QCQP"), (
+            "QCQP not initialized. Initialize and solve QCQP first."
+        )
+        assert self.QCQP is not None
+        assert self.QCQP.current_xstar is not None, (
+            "Inferred chi not available before solving QCQP dual"
+        )
+        assert self.des_mask is not None
 
-        Returns
-        -------
-        ndarray of complex
-            Inferred susceptibility.
-        """
-        raise NotImplementedError
+        des_mask_flat = self._get_des_mask_flat()
+
+        P: ComplexArray
+        Es: ComplexArray
+        if self.sparseQCQP:
+            assert self.QCQP.A2 is not None
+            P = self.QCQP.A2 @ self.QCQP.current_xstar
+            Es = self.QCQP.current_xstar
+        else:
+            assert self.G is not None
+            P = self.QCQP.current_xstar
+            Es = self.G @ P
+
+        Etotal = self.get_ei().flatten(order=self._flatten_order)[des_mask_flat] + Es
+        return P / Etotal
 
     def solve_current_dual_problem(
         self,
@@ -345,25 +489,26 @@ class Photonics_FDFD(ABC):
         init_lags: Optional[FloatNDArray] = None,
         opt_params: Optional[dict[str, Any]] = None,
     ) -> Tuple[float, FloatNDArray, FloatNDArray, Optional[FloatNDArray], ComplexArray]:
-        """
-        Delegate to bound_QCQP so callers can use a uniform method name.
-
-        Subclasses only need to implement bound_QCQP.
-
-        Parameters
-        ----------
-        method : str, optional
-            Optimization method. Default: 'bfgs'
-        init_lags : ndarray of float, optional
-            Initial Lagrange multipliers.
-        opt_params : dict, optional
-            Optimization parameters.
-
-        Returns
-        -------
-        tuple
-            (dual_value, lagrange_multipliers, gradient, hessian, primal_variable)
-        """
+        """Delegate to bound_QCQP."""
         return self.bound_QCQP(
             method=method, init_lags=init_lags, opt_params=opt_params
         )
+
+    @abstractmethod
+    def setup_EM_solver(
+        self, geometry: Optional[GeometryHyperparameters] = None
+    ) -> None:
+        """Initialize EM solver (geometry-specific)."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def setup_EM_operators(self) -> None:
+        """Build EM operators G/Ginv, M (geometry-specific)."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def _get_dof_chigrid_M_es(
+        self, dof: NDArray[np.floating]
+    ) -> Tuple[ComplexGrid, sp.csc_array, ComplexArray]:
+        """Compute chi grid and scattered field from DOFs (geometry-specific)."""
+        raise NotImplementedError
