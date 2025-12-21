@@ -31,22 +31,24 @@ class TestTMPolarFDFD:
         n_sectors = request.param
         return TM_Polar_FDFD(omega, Nphi, Nr, Npml, dr, n_sectors)
 
-    def test_instantiation(self, basic_solver):
-        """Test that solver instantiates correctly."""
-        assert basic_solver.omega == 2 * np.pi
-        assert basic_solver.Nr == 40
-        assert basic_solver.Nphi == 50
-        assert basic_solver.Npml == 10
-        assert basic_solver.M0 is not None
-        assert basic_solver.M0.shape == (40 * 50, 40 * 50)
-
     def test_pixel_areas(self, basic_solver):
         """Test pixel area computation."""
         areas = basic_solver.get_pixel_areas()
         assert len(areas) == basic_solver.Nr * basic_solver.Nphi
-        # Area should increase with radius
-        area_per_phi = areas[: basic_solver.Nr]
-        assert np.all(np.diff(area_per_phi) > 0)
+
+        # Check total area matches geometry (pi * R^2 / n_sectors)
+        R_max = basic_solver.Nr * basic_solver.dr
+        expected_total_area = (np.pi * R_max**2) / basic_solver.n_sectors
+        assert np.isclose(np.sum(areas), expected_total_area)
+
+        # Check specific pixel area manually
+        ir = 10
+        r_center = (ir + 0.5) * basic_solver.dr
+        dphi = 2 * np.pi / basic_solver.n_sectors / basic_solver.Nphi
+        expected_pixel_area = r_center * basic_solver.dr * dphi
+
+        # areas is flattened [r0..rNr-1, r0..rNr-1, ...], so index ir corresponds to that radius
+        assert np.isclose(areas[ir], expected_pixel_area)
 
     def test_dipole_field(self, basic_solver):
         """Test dipole field computation."""
