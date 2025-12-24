@@ -327,6 +327,9 @@ class TM_Polar_FDFD(Maxwell_Polar_FDFD):
         Compute vacuum Green's function from design to observation region.
 
         Convention: E_obs = (i/ω) * G_od @ J
+        This means it is a propagator (i.e., it already contains its integral).
+        Thus, G is scaled so we do not need to modify the field by areas before
+        applying it.
 
         Parameters
         ----------
@@ -354,8 +357,6 @@ class TM_Polar_FDFD(Maxwell_Polar_FDFD):
         design_lin = to_sector_lin_idx(design_mask)
         observe_lin = to_sector_lin_idx(observe_mask)
 
-        area_vec = self.get_pixel_areas()
-
         # Factorize once
         solve = spla.factorized(self.M0.tocsc())
 
@@ -366,7 +367,7 @@ class TM_Polar_FDFD(Maxwell_Polar_FDFD):
         # Build each column by a single RHS solve
         for j, p in enumerate(design_lin):
             b: ComplexArray = np.zeros(self.Nphi * self.Nr, dtype=complex)
-            b[p] = 1j * self.omega / area_vec[p]
+            b[p] = 1j * self.omega
             E = solve(b)
             G[:, j] = (-1j * self.omega) * E[observe_lin]
 
@@ -379,6 +380,8 @@ class TM_Polar_FDFD(Maxwell_Polar_FDFD):
         Compute the inverse Green's function on region A, G_{AA}^{-1}.
 
         Uses the Woodbury identity for block inversion.
+
+        Convention: J_A = GaaInv @ E_A
 
         Parameters
         ----------
@@ -412,11 +415,7 @@ class TM_Polar_FDFD(Maxwell_Polar_FDFD):
         AinvB = spla.spsolve(A, B)
 
         Gfac = self.MU_0 / self.k**2
-
-        # Apply area scaling to match get_TM_G_od definition
-        area_vec = self.get_pixel_areas()
-        V_A = sp.diags_array(area_vec[designInd], format="csc")
-        GaaInv = V_A @ (D - (C @ AinvB)) * Gfac
+        GaaInv = (D - (C @ AinvB)) * Gfac
 
         return sp.csc_array(GaaInv), M
 
@@ -555,3 +554,35 @@ def plot_cplx_polar_field(
         plt.close()
     else:
         plt.show()
+
+
+def expand_symmetric_field(field_symmetric, n_sectors, Nr, m=0):
+    """
+    Expand a symmetric field solution to the full circle, applying Bloch phase.
+    """
+    Nphi_sector = len(field_symmetric) // Nr
+
+    # Reshape to 2D (Nphi_sector, Nr) using the solver's C-order convention
+    field_2d = np.asarray(field_symmetric).reshape((Nphi_sector, Nr), order="C")
+
+    # Create list to hold the field for each sector
+    sectors_list = []
+
+    # Calculate the phase shift per sector based on angular momentum m
+    # Shift = m * (angle of one sector)
+    sector_phase_shift = m * (2 * np.pi / n_sectors)
+
+    for k in range(n_sectors):
+        # Calculate phase for the k-th sector
+        # Sector 0: phase 0
+        # Sector 1: phase shift
+        # Sector 2: 2 * phase shift...
+        phase_factor = np.exp(1j * k * sector_phase_shift)
+
+        # Apply phase and append
+        sectors_list.append(field_2d * phase_factor)
+
+    # Stack all sectors vertically (along phi axis)
+    field_full_2d = np.vstack(sectors_list)
+
+    return field_full_2d.flatten()

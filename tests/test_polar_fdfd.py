@@ -112,7 +112,7 @@ class TestPolarGreensFunction:
 
             # Green's function approach
             J_design = np.zeros(N_des, dtype=complex)
-            J_design[des_idx] = 1.0
+            J_design[des_idx] = 1.0 / area_vec[pixel_global]
             E_green_obs = (1j / solver.omega) * (G @ J_design)
 
             # Compare at observation points
@@ -157,8 +157,8 @@ class TestPolarGreensFunction:
 
         # Green's function approach
         J_design = np.zeros(N_des, dtype=complex)
-        J_design[idx1] = amp1
-        J_design[idx2] = amp2
+        J_design[idx1] = amp1 / area_vec[pixel1]
+        J_design[idx2] = amp2 / area_vec[pixel2]
         E_green_obs = (1j / solver.omega) * (G @ J_design)
 
         E_direct_obs = E_direct[observe_lin]
@@ -212,7 +212,7 @@ class TestPolarGreensFunction:
 
         # Green's function approach
         J_design = np.zeros(N_des, dtype=complex)
-        J_design[des_idx] = 1.0
+        J_design[des_idx] = 1.0 / area_vec[pixel_global]
         E_green_obs = (1j / solver.omega) * (G @ J_design)
 
         E_direct_obs = E_direct[observe_lin]
