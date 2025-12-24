@@ -12,6 +12,7 @@ import pytest
 import scipy.sparse.linalg as spla
 from scipy.special import hankel1
 
+from dolphindes.geometry import PolarFDFDGeometry
 from dolphindes.maxwell import (
     TM_Polar_FDFD,
 )
@@ -29,7 +30,8 @@ class TestTMPolarFDFD:
         Npml = 10
         dr = 0.05
         n_sectors = request.param
-        return TM_Polar_FDFD(omega, Nphi, Nr, Npml, dr, n_sectors)
+        geometry = PolarFDFDGeometry(Nphi, Nr, Npml, dr, n_sectors)
+        return TM_Polar_FDFD(omega, geometry)
 
     def test_pixel_areas(self, basic_solver):
         """Test pixel area computation."""
@@ -74,7 +76,8 @@ class TestPolarGreensFunction:
         dr = 0.05
         n_sectors = request.param
 
-        solver = TM_Polar_FDFD(omega, Nphi, Nr, Npml, dr, n_sectors)
+        geometry = PolarFDFDGeometry(Nphi, Nr, Npml, dr, n_sectors)
+        solver = TM_Polar_FDFD(omega, geometry)
 
         r_inner_des = 0.3
         r_outer_des = 1.0
@@ -179,7 +182,8 @@ class TestPolarGreensFunction:
         Npml = 10
         dr = 0.05
 
-        solver = TM_Polar_FDFD(omega, Nphi, Nr, Npml, dr, n_sectors)
+        geometry = PolarFDFDGeometry(Nphi, Nr, Npml, dr, n_sectors)
+        solver = TM_Polar_FDFD(omega, geometry)
 
         # Design region: inner annulus
         design_mask = np.zeros((Nr, Nphi), dtype=bool)
@@ -263,7 +267,8 @@ class TestGaaInv:
         dr = 0.05
         n_sectors = request.param
 
-        solver = TM_Polar_FDFD(omega, Nphi, Nr, Npml, dr, n_sectors)
+        geometry = PolarFDFDGeometry(Nphi, Nr, Npml, dr, n_sectors)
+        solver = TM_Polar_FDFD(omega, geometry)
 
         design_mask = np.zeros((Nr, Nphi), dtype=bool)
         design_mask[5:12, 10:18] = True
@@ -290,7 +295,8 @@ class TestGaaInv:
         Npml = 8
         dr = 0.05
 
-        solver = TM_Polar_FDFD(omega, Nphi, Nr, Npml, dr, n_sectors)
+        geometry = PolarFDFDGeometry(Nphi, Nr, Npml, dr, n_sectors)
+        solver = TM_Polar_FDFD(omega, geometry)
 
         design_mask = np.zeros((Nr, Nphi), dtype=bool)
         design_mask[5:12, 10:18] = True
@@ -326,7 +332,8 @@ class TestPolarPML:
         dr = 0.02
         n_sectors = 1
 
-        solver = TM_Polar_FDFD(omega, Nphi, Nr, Npml, dr, n_sectors=n_sectors, m=m)
+        geometry = PolarFDFDGeometry(Nphi, Nr, Npml, dr, n_sectors=n_sectors, m=m)
+        solver = TM_Polar_FDFD(omega, geometry)
 
         # use a symmetric ring source at the first radial bin
         # to excite only the m=0 mode (cylindrical wave), matching H0(kr).

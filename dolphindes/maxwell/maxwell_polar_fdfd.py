@@ -21,6 +21,7 @@ import numpy as np
 import scipy.sparse as sp
 import scipy.sparse.linalg as spla
 
+from dolphindes.geometry import PolarFDFDGeometry
 from dolphindes.types import (
     BoolGrid,
     ComplexArray,
@@ -58,25 +59,19 @@ class Maxwell_Polar_FDFD(ABC):
 
     def __init__(
         self,
-        omega: complex | float,
-        Nphi: int,
-        Nr: int,
-        Npml: int,
-        dr: float,
-        n_sectors: int = 1,
-        bloch_phase: float = 0.0,
-        m: int = 3,
-        lnR: float = -20.0,
+        omega: complex,
+        geometry: PolarFDFDGeometry,
     ) -> None:
         self.omega = omega
-        self.Nr = Nr
-        self.Nphi = Nphi
-        self.Npml = Npml
-        self.dr = dr
-        self.n_sectors = n_sectors
-        self.bloch_phase = bloch_phase
-        self.m = m
-        self.lnR = lnR
+        self.geometry = geometry
+        self.Nr = geometry.Nr
+        self.Nphi = geometry.Nphi
+        self.Npml = geometry.Npml
+        self.dr = geometry.dr
+        self.n_sectors = geometry.n_sectors
+        self.bloch_phase = geometry.bloch_phase
+        self.m = geometry.m
+        self.lnR = geometry.lnR
 
         self.EPSILON_0 = 1.0
         self.MU_0 = 1.0
@@ -84,10 +79,11 @@ class Maxwell_Polar_FDFD(ABC):
         self.ETA_0 = 1.0
         self.k = self.omega / self.C_0
 
-        self.r_grid: FloatNDArray = (np.arange(Nr) + 0.5) * dr
-        self.dphi = 2 * np.pi / n_sectors / Nphi
+        self.r_grid: FloatNDArray = (np.arange(self.Nr) + 0.5) * self.dr
+        self.dphi = 2 * np.pi / self.n_sectors / self.Nphi
         self.phi_grid: FloatNDArray = cast(
-            FloatNDArray, np.linspace(0, 2 * np.pi / n_sectors, Nphi, endpoint=False)
+            FloatNDArray,
+            np.linspace(0, 2 * np.pi / self.n_sectors, self.Nphi, endpoint=False),
         )
 
         self.nonpmlNr = self.Nr - self.Npml
@@ -110,17 +106,10 @@ class TM_Polar_FDFD(Maxwell_Polar_FDFD):
 
     def __init__(
         self,
-        omega: complex | float,
-        Nphi: int,
-        Nr: int,
-        Npml: int,
-        dr: float,
-        n_sectors: int = 1,
-        bloch_phase: float = 0.0,
-        m: int = 3,
-        lnR: float = -20.0,
+        omega: complex,
+        geometry: PolarFDFDGeometry,
     ) -> None:
-        super().__init__(omega, Nphi, Nr, Npml, dr, n_sectors, bloch_phase, m, lnR)
+        super().__init__(omega, geometry)
         self.M0 = self._make_TM_Maxwell_Operator()
 
     def _make_TM_Maxwell_Operator(self) -> sp.csc_array:

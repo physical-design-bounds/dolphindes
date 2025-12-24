@@ -21,15 +21,16 @@ import scipy.sparse.linalg as spla
 from numpy.typing import NDArray
 
 from dolphindes.cvxopt import DenseSharedProjQCQP, SparseSharedProjQCQP
+from dolphindes.geometry import CartesianFDFDGeometry, PolarFDFDGeometry
 from dolphindes.maxwell import TM_FDFD, TM_Polar_FDFD
-from dolphindes.types import BoolGrid, ComplexArray, ComplexGrid
+from dolphindes.types import (
+    BoolGrid,
+    ComplexArray,
+    ComplexGrid,
+)
 from dolphindes.util import check_attributes
 
-from ._base_photonics import (
-    CartesianFDFDGeometry,
-    Photonics_FDFD,
-    PolarFDFDGeometry,
-)
+from ._base_photonics import Photonics_FDFD
 
 
 class Photonics_TM_FDFD(Photonics_FDFD):
@@ -182,16 +183,7 @@ class Photonics_TM_FDFD(Photonics_FDFD):
             "bloch_x",
             "bloch_y",
         )
-        self.EM_solver = TM_FDFD(
-            self.omega,
-            self.geometry.Nx,
-            self.geometry.Ny,
-            self.geometry.Npmlx,
-            self.geometry.Npmly,
-            self.geometry.dx,
-            self.geometry.bloch_x,
-            self.geometry.bloch_y,
-        )
+        self.EM_solver = TM_FDFD(self.omega, self.geometry)
 
     def setup_EM_operators(self) -> None:
         """
@@ -528,17 +520,7 @@ class Photonics_TM_Polar_FDFD(Photonics_FDFD):
             "bloch_phase",
         )
         geo = self.geometry
-        self.EM_solver = TM_Polar_FDFD(
-            self.omega,
-            geo.Nphi,
-            geo.Nr,
-            geo.Npml,
-            geo.dr,
-            geo.n_sectors,
-            geo.bloch_phase,
-            geo.m,
-            geo.lnR,
-        )
+        self.EM_solver = TM_Polar_FDFD(self.omega, geo)
 
     def setup_EM_operators(self) -> None:
         """

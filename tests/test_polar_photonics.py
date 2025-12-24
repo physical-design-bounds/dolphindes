@@ -4,7 +4,8 @@ import numpy as np
 import pytest
 import scipy.sparse as sp
 
-from dolphindes.photonics import Photonics_TM_Polar_FDFD, PolarFDFDGeometry
+from dolphindes.geometry import PolarFDFDGeometry
+from dolphindes.photonics import Photonics_TM_Polar_FDFD
 
 
 class TestPhotonicsTMPolarFDFD:

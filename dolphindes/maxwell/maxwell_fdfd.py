@@ -11,13 +11,16 @@ one for the Green's function.
 
 __all__ = ["TM_FDFD"]
 
+from abc import ABC
+
 import numpy as np
 import scipy.sparse as sp
 
+from dolphindes.geometry import CartesianFDFDGeometry
 from dolphindes.types import BoolGrid, ComplexGrid
 
 
-class Maxwell_FDFD:
+class Maxwell_FDFD(ABC):
     """
     Finite-difference frequency-domain solver for Maxwell's equations in 2D.
 
@@ -25,8 +28,6 @@ class Maxwell_FDFD:
     ----------
     omega : complex
         circular frequency, can be complex to allow for finite bandwidth effects
-    wavelength : float
-        wavelength of the wave, in units of 1
     dx : float
         finite difference grid pixel size in x-axis, in units of 1
     dy : float
@@ -49,44 +50,34 @@ class Maxwell_FDFD:
 
     def __init__(
         self,
-        omega: complex | float,
-        Nx: int,
-        Ny: int,
-        Npmlx: int,
-        Npmly: int,
-        dx: float,
-        dy: float,
-        bloch_x: float = 0.0,
-        bloch_y: float = 0.0,
+        omega: complex,
+        geometry: CartesianFDFDGeometry,
     ) -> None:
         self.omega = omega
+        self.geometry = geometry
 
-        if (
-            not isinstance(Nx, int)
-            or not isinstance(Ny, int)
-            or not isinstance(Npmlx, int)
-            or not isinstance(Npmly, int)
-        ):
+        # Ensure grid dimensions are integers
+        self.Nx, self.Ny, self.Npmlx, self.Npmly = (
+            int(geometry.Nx),
+            int(geometry.Ny),
+            int(geometry.Npmlx),
+            int(geometry.Npmly),
+        )
+        if (self.Nx != geometry.Nx) or (self.Ny != geometry.Ny):
             import warnings
 
             warnings.warn(
-                "Nx, Ny, Npmlx, and Npmly should be integers. "
-                "Automatically converting them to integers."
+                "Grid dimensions were not integers. Automatically converted to integers."
             )
-            Nx, Ny, Npmlx, Npmly = int(Nx), int(Ny), int(Npmlx), int(Npmly)
 
-        self.Nx = Nx
-        self.Ny = Ny
-        self.Npmlx = Npmlx
-        self.Npmly = Npmly
-        self.dx = dx
-        self.dy = dy
+        self.dx = geometry.dx
+        self.dy = geometry.dy
         self.EPSILON_0 = 1.0
         self.MU_0 = 1.0
         self.C_0 = 1.0
         self.ETA_0 = 1.0
-        self.bloch_x = bloch_x
-        self.bloch_y = bloch_y
+        self.bloch_x = geometry.bloch_x
+        self.bloch_y = geometry.bloch_y
         self.k = self.omega / self.C_0
 
         self.nonpmlNx = self.Nx - 2 * self.Npmlx
@@ -106,8 +97,6 @@ class TM_FDFD(Maxwell_FDFD):
     Attributes
     ----------
     All of the attributes of the parent class Maxwell_FDFD, plus:
-    dl : float
-        finite difference grid pixel size, in units of 1
     M0 : sp.csc_array
         Maxwell operator in sparse matrix format, representing the operator
         ∇x∇x - omega^2 I in 2D for TM fields.
@@ -115,18 +104,10 @@ class TM_FDFD(Maxwell_FDFD):
 
     def __init__(
         self,
-        omega: complex | float,
-        Nx: int,
-        Ny: int,
-        Npmlx: int,
-        Npmly: int,
-        dl: float,
-        bloch_x: float = 0.0,
-        bloch_y: float = 0.0,
+        omega: complex,
+        geometry: CartesianFDFDGeometry,
     ) -> None:
-        dx, dy = dl, dl
-        super().__init__(omega, Nx, Ny, Npmlx, Npmly, dx, dy, bloch_x, bloch_y)
-        self.dl = dl
+        super().__init__(omega, geometry)
         self.M0 = self._make_TM_Maxwell_Operator(
             self.Nx, self.Ny, self.Npmlx, self.Npmly
         )
@@ -276,7 +257,8 @@ class TM_FDFD(Maxwell_FDFD):
             omega: complex,
             shape: tuple[int, int],
             npml: tuple[int, int],
-            dL: float,
+            dx: float,
+            dy: float,
         ) -> tuple[sp.csc_array, sp.csc_array, sp.csc_array, sp.csc_array]:
             """Make the S-matrices.
 
@@ -288,10 +270,10 @@ class TM_FDFD(Maxwell_FDFD):
             Nx_pml, Ny_pml = npml
 
             # Create the sfactor in each direction and for 'f' and 'b'
-            s_vector_x_f = create_sfactor("f", omega, dL, Nx, Nx_pml)
-            s_vector_x_b = create_sfactor("b", omega, dL, Nx, Nx_pml)
-            s_vector_y_f = create_sfactor("f", omega, dL, Ny, Ny_pml)
-            s_vector_y_b = create_sfactor("b", omega, dL, Ny, Ny_pml)
+            s_vector_x_f = create_sfactor("f", omega, dx, Nx, Nx_pml)
+            s_vector_x_b = create_sfactor("b", omega, dx, Nx, Nx_pml)
+            s_vector_y_f = create_sfactor("f", omega, dy, Ny, Ny_pml)
+            s_vector_y_b = create_sfactor("b", omega, dy, Ny, Ny_pml)
 
             # Fill the 2D space with layers of appropriate s-factors
             Sx_f_2D = np.zeros(shape, dtype=complex)
@@ -324,13 +306,13 @@ class TM_FDFD(Maxwell_FDFD):
 
         shape = (Nx, Ny)
 
-        Dxf = make_Dxf(self.dl, shape, bloch_x=self.bloch_x)
-        Dxb = make_Dxb(self.dl, shape, bloch_x=self.bloch_x)
-        Dyf = make_Dyf(self.dl, shape, bloch_y=self.bloch_y)
-        Dyb = make_Dyb(self.dl, shape, bloch_y=self.bloch_y)
+        Dxf = make_Dxf(self.dx, shape, bloch_x=self.bloch_x)
+        Dxb = make_Dxb(self.dx, shape, bloch_x=self.bloch_x)
+        Dyf = make_Dyf(self.dy, shape, bloch_y=self.bloch_y)
+        Dyb = make_Dyb(self.dy, shape, bloch_y=self.bloch_y)
 
         Sxf, Sxb, Syf, Syb = create_S_matrices(
-            self.omega, shape, (Npmlx, Npmly), self.dl
+            self.omega, shape, (Npmlx, Npmly), self.dx, self.dy
         )
 
         # dress the derivative functions with pml
@@ -378,7 +360,7 @@ class TM_FDFD(Maxwell_FDFD):
             Field of the dipole source at position (cx, cy).
         """
         sourcegrid: ComplexGrid = np.zeros((self.Nx, self.Ny), dtype=complex)
-        sourcegrid[cx, cy] = 1.0 / (self.dl**2)
+        sourcegrid[cx, cy] = 1.0 / (self.dx * self.dy)
         return self.get_TM_field(sourcegrid, chigrid)
 
     def get_TM_field(
@@ -464,7 +446,7 @@ class TM_FDFD(Maxwell_FDFD):
 
         # place a unit dipole source at the center of the big grid
         sourcegrid = np.zeros((bigNx, bigNy), dtype=complex)
-        sourcegrid[bigcx, bigcy] = 1.0 / self.dl
+        sourcegrid[bigcx, bigcy] = 1.0 / (self.dx * self.dy)
         RHS = 1j * self.omega * sourcegrid.flatten()
 
         # solve once for Ezfield on the big grid
@@ -485,7 +467,7 @@ class TM_FDFD(Maxwell_FDFD):
             Gba[:, i] = window[B_mask_s]
 
         # scale to get the true vacuum Green's function for TM polarization
-        Gba *= self.dl * (-1j * self.k / self.ETA_0)
+        Gba *= (self.dx * self.dy) * (-1j * self.k / self.ETA_0)
         return Gba
 
     def get_GaaInv(
