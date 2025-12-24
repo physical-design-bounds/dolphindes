@@ -2,7 +2,11 @@
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Tuple
+from typing import Tuple, cast
+
+import numpy as np
+
+from dolphindes.types import FloatNDArray
 
 
 @dataclass
@@ -18,6 +22,18 @@ class GeometryHyperparameters(ABC):
         -------
         tuple of int
             Grid dimensions (Nx, Ny).
+        """
+        pass
+
+    @abstractmethod
+    def get_pixel_areas(self) -> FloatNDArray:
+        """
+        Return the area of each pixel in the grid.
+
+        Returns
+        -------
+        ndarray of float
+            Flattened array of pixel areas.
         """
         pass
 
@@ -69,6 +85,17 @@ class CartesianFDFDGeometry(GeometryHyperparameters):
         """
         return (self.Nx, self.Ny)
 
+    def get_pixel_areas(self) -> FloatNDArray:
+        """
+        Return the area of each pixel in the grid.
+
+        Returns
+        -------
+        ndarray of float
+            Flattened array of pixel areas (all equal to dx * dy).
+        """
+        return np.full(self.Nx * self.Ny, self.dx * self.dy, dtype=np.float64)
+
 
 @dataclass
 class PolarFDFDGeometry(GeometryHyperparameters):
@@ -118,3 +145,17 @@ class PolarFDFDGeometry(GeometryHyperparameters):
             Grid dimensions (Nr, Nphi).
         """
         return (self.Nr, self.Nphi)
+
+    def get_pixel_areas(self) -> FloatNDArray:
+        """
+        Return the area of each pixel in the grid.
+
+        Returns
+        -------
+        ndarray of float
+            Flattened array of pixel areas.
+        """
+        r_grid = (np.arange(self.Nr) + 0.5) * self.dr
+        dphi = 2 * np.pi / self.n_sectors / self.Nphi
+        area_r = r_grid * self.dr * dphi
+        return cast(FloatNDArray, np.kron(np.ones(self.Nphi), area_r))
