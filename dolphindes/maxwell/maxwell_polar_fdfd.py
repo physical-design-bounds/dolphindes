@@ -268,23 +268,11 @@ class TM_Polar_FDFD(Maxwell_Polar_FDFD):
         Ez : ComplexArray
             Electric field solution.
         """
-        area = self.get_pixel_areas()
+        area = self.geometry.get_pixel_areas()
         idx = iphi * self.Nr + ir
         sourcegrid: ComplexArray = np.zeros(self.Nphi * self.Nr, dtype=complex)
         sourcegrid[idx] = 1.0 / area[idx]
         return self.get_TM_field(sourcegrid, chigrid)
-
-    def get_pixel_areas(self) -> FloatNDArray:
-        """
-        Compute per-pixel areas for the polar grid.
-
-        Returns
-        -------
-        area_vec : FloatNDArray
-            Area of each pixel (length Nphi * Nr).
-        """
-        area_r = self.r_grid * self.dr * self.dphi
-        return cast(FloatNDArray, np.kron(np.ones(self.Nphi), area_r))
 
     def get_symmetric_grids(
         self,
@@ -506,6 +494,7 @@ def plot_cplx_polar_field(
     r_mesh, phi_mesh = np.meshgrid(r_grid, phi_grid, indexing="ij")
     field_mesh = _as_polar_mesh(field, phi_grid, r_grid)
 
+    norm: colors.Normalize
     if use_log:
         norm = colors.SymLogNorm(linthresh=linthresh, linscale=linscale)
     else:
@@ -518,8 +507,8 @@ def plot_cplx_polar_field(
     ax2.grid(show_grid)
 
     if not np.allclose(2 * np.pi - phi_grid[-1], phi_grid[1] - phi_grid[0]):
-        ax1.set_xlim([phi_grid[0], phi_grid[-1]])
-        ax2.set_xlim([phi_grid[0], phi_grid[-1]])
+        ax1.set_xlim((phi_grid[0], phi_grid[-1]))
+        ax2.set_xlim((phi_grid[0], phi_grid[-1]))
 
     p1 = ax1.pcolormesh(phi_mesh, r_mesh, np.real(field_mesh), cmap="bwr", norm=norm)
     ax1.set_title("real")
@@ -545,9 +534,27 @@ def plot_cplx_polar_field(
         plt.show()
 
 
-def expand_symmetric_field(field_symmetric, n_sectors, Nr, m=0):
+def expand_symmetric_field(
+    field_symmetric: ComplexGrid, n_sectors: int, Nr: int, m: int = 0
+) -> ComplexArray:
     """
     Expand a symmetric field solution to the full circle, applying Bloch phase.
+
+    Parameters
+    ----------
+    field_symmetric : ComplexGrid
+        The field solution for a single sector (flattened).
+    n_sectors : int
+        Number of rotational symmetry sectors.
+    Nr : int
+        Number of radial grid points.
+    m : int, optional
+        Angular momentum number (azimuthal mode index). Default is 0.
+
+    Returns
+    -------
+    ComplexArray
+        The expanded field over the full circle (flattened).
     """
     Nphi_sector = len(field_symmetric) // Nr
 

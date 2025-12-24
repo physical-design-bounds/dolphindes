@@ -66,9 +66,7 @@ class Maxwell_FDFD(ABC):
         if (self.Nx != geometry.Nx) or (self.Ny != geometry.Ny):
             import warnings
 
-            warnings.warn(
-                "Grid dimensions were not integers. Automatically converted to integers."
-            )
+            warnings.warn("Automatically converted grid dimensions to integers.")
 
         self.dx = geometry.dx
         self.dy = geometry.dy
