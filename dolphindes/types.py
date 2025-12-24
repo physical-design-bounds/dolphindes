@@ -6,9 +6,6 @@ import numpy as np
 import scipy.sparse as sp
 from numpy.typing import ArrayLike, NDArray
 
-from dolphindes.geometry import CartesianFDFDGeometry, GeometryHyperparameters
-
-# Public-facing (input) wide types
 ArrayLikeFloat: TypeAlias = ArrayLike
 
 FloatNDArray: TypeAlias = NDArray[np.float64]
@@ -27,6 +24,4 @@ __all__ = [
     "ComplexGrid",
     "BoolGrid",
     "SparseDense",
-    "CartesianFDFDGeometry",
-    "GeometryHyperparameters",
 ]
