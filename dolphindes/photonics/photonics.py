@@ -152,7 +152,9 @@ class Photonics_TM_FDFD(Photonics_FDFD):
             f"sparseQCQP={self.sparseQCQP})"
         )
 
-    def setup_EM_solver(self, geometry: GeometryHyperparameters) -> None:
+    def setup_EM_solver(
+        self, geometry: Optional[GeometryHyperparameters] = None
+    ) -> None:
         """
         Set up the FDFD electromagnetic solver with given geometry.
 
