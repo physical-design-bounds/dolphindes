@@ -1,15 +1,15 @@
-"""Tests for Photonics_TM_Polar_FDFD class."""
+"""Tests for Photonics_TM_FDFD class with Polar geometry."""
 
 import numpy as np
 import pytest
 import scipy.sparse as sp
 
 from dolphindes.geometry import PolarFDFDGeometry
-from dolphindes.photonics import Photonics_TM_Polar_FDFD
+from dolphindes.photonics import Photonics_TM_FDFD
 
 
-class TestPhotonicsTMPolarFDFD:
-    """Test Photonics_TM_Polar_FDFD class functionality."""
+class TestPhotonicsTMFDFDPolar:
+    """Test Photonics_TM_FDFD class functionality with Polar geometry."""
 
     @pytest.fixture
     def absorption_problem_setup(self):
@@ -79,7 +79,7 @@ class TestPhotonicsTMPolarFDFD:
         """Test that solver instantiates correctly."""
         setup = absorption_problem_setup
 
-        problem = Photonics_TM_Polar_FDFD(
+        problem = Photonics_TM_FDFD(
             omega=setup["omega"],
             geometry=setup["geometry"],
             chi=setup["chi"],
@@ -96,7 +96,7 @@ class TestPhotonicsTMPolarFDFD:
         """Test incident field computation."""
         setup = absorption_problem_setup
 
-        problem = Photonics_TM_Polar_FDFD(
+        problem = Photonics_TM_FDFD(
             omega=setup["omega"],
             geometry=setup["geometry"],
             chi=setup["chi"],
@@ -114,7 +114,7 @@ class TestPhotonicsTMPolarFDFD:
         """Test QCQP setup with sparse formulation."""
         setup = absorption_problem_setup
 
-        problem = Photonics_TM_Polar_FDFD(
+        problem = Photonics_TM_FDFD(
             omega=setup["omega"],
             geometry=setup["geometry"],
             chi=setup["chi"],
@@ -135,7 +135,7 @@ class TestPhotonicsTMPolarFDFD:
         """Test that QCQP bound can be computed."""
         setup = absorption_problem_setup
 
-        problem = Photonics_TM_Polar_FDFD(
+        problem = Photonics_TM_FDFD(
             omega=setup["omega"],
             geometry=setup["geometry"],
             chi=setup["chi"],
@@ -160,7 +160,7 @@ class TestPhotonicsTMPolarFDFD:
         """Test inferred chi computation after solving."""
         setup = absorption_problem_setup
 
-        problem = Photonics_TM_Polar_FDFD(
+        problem = Photonics_TM_FDFD(
             omega=setup["omega"],
             geometry=setup["geometry"],
             chi=setup["chi"],
@@ -188,7 +188,7 @@ class TestPhotonicsTMPolarFDFD:
         # Add some background feature to ensure M is not just M0
         chi_bg[5, 5] = 1.0 + 0.1j
 
-        problem = Photonics_TM_Polar_FDFD(
+        problem = Photonics_TM_FDFD(
             omega=setup["omega"],
             geometry=setup["geometry"],
             chi=setup["chi"],
@@ -234,7 +234,7 @@ class TestPhotonicsTMPolarFDFD:
         setup = absorption_problem_setup
 
         # 1. Sparse
-        prob_sparse = Photonics_TM_Polar_FDFD(
+        prob_sparse = Photonics_TM_FDFD(
             omega=setup["omega"],
             geometry=setup["geometry"],
             chi=setup["chi"],
@@ -250,7 +250,7 @@ class TestPhotonicsTMPolarFDFD:
         val_sparse, _, _, _, _ = prob_sparse.bound_QCQP(method="bfgs")
 
         # 2. Dense
-        prob_dense = Photonics_TM_Polar_FDFD(
+        prob_dense = Photonics_TM_FDFD(
             omega=setup["omega"],
             geometry=setup["geometry"],
             chi=setup["chi"],

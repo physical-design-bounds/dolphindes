@@ -35,7 +35,7 @@ class TestTMPolarFDFD:
 
     def test_pixel_areas(self, basic_solver):
         """Test pixel area computation."""
-        areas = basic_solver.get_pixel_areas()
+        areas = basic_solver.geometry.get_pixel_areas()
         assert len(areas) == basic_solver.Nr * basic_solver.Nphi
 
         # Check total area matches geometry (pi * R^2 / n_sectors)
@@ -95,7 +95,7 @@ class TestPolarGreensFunction:
         solver, design_mask, observe_mask = greens_setup
         G = solver.get_TM_G_od(design_mask, observe_mask)
 
-        area_vec = solver.get_pixel_areas()
+        area_vec = solver.geometry.get_pixel_areas()
         design_lin = np.nonzero(design_mask.flatten(order="F"))[0]
         observe_lin = np.nonzero(observe_mask.flatten(order="F"))[0]
 
@@ -141,7 +141,7 @@ class TestPolarGreensFunction:
         solver, design_mask, observe_mask = greens_setup
         G = solver.get_TM_G_od(design_mask, observe_mask)
 
-        area_vec = solver.get_pixel_areas()
+        area_vec = solver.geometry.get_pixel_areas()
         design_lin = np.nonzero(design_mask.flatten(order="F"))[0]
         observe_lin = np.nonzero(observe_mask.flatten(order="F"))[0]
 
@@ -199,7 +199,7 @@ class TestPolarGreensFunction:
 
         G = solver.get_TM_G_od(design_mask, observe_mask)
 
-        area_vec = solver.get_pixel_areas()
+        area_vec = solver.geometry.get_pixel_areas()
         design_lin = np.nonzero(design_mask.flatten(order="F"))[0]
         observe_lin = np.nonzero(observe_mask.flatten(order="F"))[0]
 
@@ -233,7 +233,7 @@ class TestPolarGreensFunction:
         For unit dipoles p1=p2=1, the fields should be identical
         """
         solver, _, _ = greens_setup
-        area_vec = solver.get_pixel_areas()
+        area_vec = solver.geometry.get_pixel_areas()
 
         p1 = solver.Nr // 3
         p2 = 2 * solver.Nr // 3
@@ -338,7 +338,7 @@ class TestPolarPML:
         # use a symmetric ring source at the first radial bin
         # to excite only the m=0 mode (cylindrical wave), matching H0(kr).
         J = np.zeros((Nr, Nphi), dtype=complex)
-        area_2d = solver.get_pixel_areas().reshape((Nr, Nphi), order="F")
+        area_2d = solver.geometry.get_pixel_areas().reshape((Nr, Nphi), order="F")
         J[0, :] = 1.0 / area_2d[0, :] / Nphi
         Ez = solver.get_TM_field(J.flatten(order="F"))
 

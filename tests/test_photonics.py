@@ -70,7 +70,6 @@ def test_Photonics_TM_FDFD_adjoint():
     abs_problem_sparse.get_ei(ji, update=True)
     abs_problem_sparse.set_objective(A0=A0_p, s0=s0_p, c0=c0, denseToSparse=True)
 
-    ## adding non-trivial chi_background makes setup_EM_operators very slow
     abs_problem_dense = Photonics_TM_FDFD(
         omega=omega,
         geometry=geometry,
