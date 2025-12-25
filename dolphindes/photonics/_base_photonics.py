@@ -469,9 +469,7 @@ class Photonics_FDFD(ABC):
         )
 
     @abstractmethod
-    def setup_EM_solver(
-        self, geometry: Optional[GeometryHyperparameters] = None
-    ) -> None:
+    def setup_EM_solver(self, geometry: GeometryHyperparameters) -> None:
         """Initialize EM solver (geometry-specific)."""
         raise NotImplementedError
 

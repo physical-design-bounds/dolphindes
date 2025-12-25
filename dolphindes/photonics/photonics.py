@@ -19,7 +19,11 @@ import scipy.sparse as sp
 import scipy.sparse.linalg as spla
 from numpy.typing import NDArray
 
-from dolphindes.geometry import CartesianFDFDGeometry, PolarFDFDGeometry
+from dolphindes.geometry import (
+    CartesianFDFDGeometry,
+    GeometryHyperparameters,
+    PolarFDFDGeometry,
+)
 from dolphindes.maxwell import TM_FDFD, TM_Polar_FDFD
 from dolphindes.types import (
     BoolGrid,
@@ -123,7 +127,7 @@ class Photonics_TM_FDFD(Photonics_FDFD):
 
         try:
             check_attributes(self, "omega", "geometry", "chi", "des_mask", "sparseQCQP")
-            self.setup_EM_solver()
+            self.setup_EM_solver(geometry)
             self.setup_EM_operators()
         except AttributeError:
             warnings.warn(
@@ -148,9 +152,7 @@ class Photonics_TM_FDFD(Photonics_FDFD):
             f"sparseQCQP={self.sparseQCQP})"
         )
 
-    def setup_EM_solver(
-        self, geometry: CartesianFDFDGeometry | PolarFDFDGeometry
-    ) -> None:
+    def setup_EM_solver(self, geometry: GeometryHyperparameters) -> None:
         """
         Set up the FDFD electromagnetic solver with given geometry.
 
@@ -161,7 +163,8 @@ class Photonics_TM_FDFD(Photonics_FDFD):
 
         Notes
         -----
-        Creates a TM_FDFD or TM_Polar_FDFD solver instance and stores it in self.EM_solver.
+        Creates a TM_FDFD or TM_Polar_FDFD solver instance and stores it in
+        self.EM_solver.
         """
         if geometry is not None:
             self.geometry = geometry
