@@ -295,7 +295,6 @@ class Photonics_FDFD(ABC):
         invSqrtW = 1.0 / sqrtW
 
         if self.sparseQCQP:
-            # raise NotImplementedError("sparseQCQP not implemented for Polar FDFD yet.")
             if (self.Ginv is None) or (self.M is None):
                 self.setup_EM_operators()
 
