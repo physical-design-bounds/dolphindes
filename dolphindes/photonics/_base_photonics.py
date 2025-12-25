@@ -12,7 +12,7 @@ __all__ = [
 import copy
 import warnings
 from abc import ABC, abstractmethod
-from typing import Any, Optional, Tuple, Union
+from typing import Any, Literal, Optional, Tuple, Union
 
 import numpy as np
 import scipy.sparse as sp
@@ -70,14 +70,10 @@ class Photonics_FDFD(ABC):
         The QCQP instance for optimization.
     """
 
-    # "C" for Cartesian, "F" for Polar
-    # Because of the solver conventions.
-    _flatten_order: str = "C"
-
     def __init__(
         self,
         omega: complex,
-        geometry: Optional[GeometryHyperparameters] = None,
+        geometry: GeometryHyperparameters,
         chi: Optional[complex] = None,
         des_mask: Optional[BoolGrid] = None,
         ji: Optional[ComplexGrid] = None,
@@ -88,6 +84,7 @@ class Photonics_FDFD(ABC):
         s0: Optional[ComplexArray] = None,
         c0: float = 0.0,
         Pdiags: Optional[str] = None,
+        flatten_order: Literal["C", "F"] = "C",
     ) -> None:
         """
         Initialize Photonics_FDFD.
@@ -137,6 +134,7 @@ class Photonics_FDFD(ABC):
         self.c0 = c0
         self.Pdiags = Pdiags
         self.QCQP: Optional[Union[SparseSharedProjQCQP, DenseSharedProjQCQP]] = None
+        self._flatten_order: Literal["C", "F"] = flatten_order
 
         self.Ginv: Optional[sp.csc_array] = None
         self.G: Optional[ComplexArray] = None
@@ -183,7 +181,7 @@ class Photonics_FDFD(ABC):
         denseToSparse: bool = False,
     ) -> None:
         """
-        Set QCQP objective parameters.
+        Set QCQP objective parameters with appropriate basis transformations.
 
         Parameters
         ----------
@@ -196,27 +194,159 @@ class Photonics_FDFD(ABC):
         denseToSparse : bool, optional
             Convert dense to sparse representation. Default: False
         """
-        if denseToSparse:
-            if not self.sparseQCQP:
-                raise ValueError(
-                    "sparseQCQP needs to be True to use dense-to-sparse conversion."
-                )
-            if A0 is not None:
-                assert self.Ginv is not None
-                self.A0 = self.Ginv.T.conj() @ sp.csc_array(A0) @ self.Ginv
-            if s0 is not None:
-                assert self.Ginv is not None
-                self.dense_s0 = s0
-                self.s0 = self.Ginv.T.conj() @ s0
-        else:
-            if A0 is not None:
-                self.A0 = A0
-            if s0 is not None:
-                self.s0 = s0
-                self.dense_s0 = None
+        des_mask_flat = self._get_des_mask_flat()
+        areas = self.geometry.get_pixel_areas()[des_mask_flat]
 
+        if self.sparseQCQP:
+            if denseToSparse:
+                assert self.Ginv is not None
+                W_mat = sp.diags(areas)  # Full integration measure
+                if A0 is not None:
+                    term = W_mat @ sp.csc_array(A0)
+                    self.A0 = self.Ginv.conj().T @ term @ self.Ginv
+                if s0 is not None:
+                    self.dense_s0 = s0
+                    self.s0 = self.Ginv.conj().T @ (W_mat @ s0)
+            else:
+                # Direct, assumes the user knows what they are doing
+                if A0 is not None:
+                    self.A0 = A0
+                if s0 is not None:
+                    self.s0 = s0
+                    self.dense_s0 = None
+        else:
+            if denseToSparse:
+                raise ValueError("Cannot use denseToSparse=True when sparseQCQP=False.")
+
+            # Transform physical inputs to weighted current basis (x = sqrt(W) J)
+            sqrtW = np.sqrt(areas)
+            invSqrtW = 1.0 / sqrtW
+
+            if A0 is not None:
+                if sp.issparse(A0):
+                    A0_dense = A0.toarray()
+                else:
+                    A0_dense = A0
+                self.A0 = sqrtW[:, None] * A0_dense * invSqrtW[None, :]
+
+            if s0 is not None:
+                # Vector Scaling: sqrtW * s0
+                # Matches J' W s0 -> x' sqrtW s0
+                self.dense_s0 = s0
+                self.s0 = sqrtW * s0
+
+        # Constant c0 is coordinate-independent
         if c0 is not None:
             self.c0 = c0
+
+    def setup_QCQP(self, Pdiags: str = "global", verbose: float = 0) -> None:
+        """
+        Set up the quadratically constrained quadratic programming (QCQP) problem.
+
+        Parameters
+        ----------
+        Pdiags : str or ndarray, optional
+            Specification for projection matrix diagonals. If "global", creates
+            global projectors with ones and -1j entries. Default: "global"
+        verbose : float, optional
+            Verbosity level for debugging output. Default: 0
+
+        Notes
+        -----
+        For sparse QCQP, creates SparseSharedProjQCQP with transformed matrices.
+        For dense QCQP, creates DenseSharedProjQCQP with original matrices.
+
+        Raises
+        ------
+        AttributeError
+            If required attributes (des_mask, A0, s0, c0) are not defined.
+        ValueError
+            If neither ji nor ei is specified, or if Pdiags specification is invalid.
+        """
+        from dolphindes.util import check_attributes
+
+        check_attributes(self, "des_mask", "A0", "s0", "c0")
+        assert self.des_mask is not None
+        assert self.EM_solver is not None
+
+        self.Ndes = int(np.sum(self.des_mask))
+        des_mask_flat = self._get_des_mask_flat()
+
+        if (self.ji is None) and (self.ei is None):
+            raise AttributeError("an initial current ji or field ei must be specified.")
+        if self.ji is not None and self.ei is not None:
+            warnings.warn("If both ji and ei are specified then ji is ignored.")
+
+        self.get_ei(self.ji, update=True)
+
+        if Pdiags == "global":
+            Id = sp.eye_array(self.Ndes, dtype=complex, format="csc")
+            self.Plist = [Id, (-1j) * Id]
+        else:
+            raise ValueError("Not a valid Pdiags specification / needs implementation")
+
+        assert self.chi is not None
+        assert self.ei is not None
+
+        ei_des = self.ei.flatten(order=self._flatten_order)[des_mask_flat]
+
+        areas = self.geometry.get_pixel_areas()[des_mask_flat]
+        sqrtW = np.sqrt(areas)
+        invSqrtW = 1.0 / sqrtW
+
+        if self.sparseQCQP:
+            # raise NotImplementedError("sparseQCQP not implemented for Polar FDFD yet.")
+            if (self.Ginv is None) or (self.M is None):
+                self.setup_EM_operators()
+
+            assert self.Ginv is not None
+            W_mat = sp.diags(areas, format="csc")
+
+            A2_sparse = self.Ginv
+            term1 = self.Ginv.conj().T @ (
+                W_mat @ (sp.eye(self.Ginv.shape[0]) * np.conj(1.0 / self.chi))
+            )
+            term2 = W_mat
+
+            A1_sparse = term1 - term2
+            s1_sparse = W_mat @ (ei_des / 2)
+
+            self.QCQP = SparseSharedProjQCQP(
+                self.A0,
+                self.s0,
+                self.c0,
+                A1_sparse,
+                A2_sparse,
+                s1_sparse,
+                self.Plist,
+                verbose=int(verbose),
+            )
+        else:
+            if self.G is None:
+                self.setup_EM_operators()
+
+            assert self.G is not None
+
+            if sp.issparse(self.A0):
+                self.A0 = self.A0.toarray()
+
+            G_weighted = sqrtW[:, None] * self.G * invSqrtW[None, :]
+            A1_dense = (
+                np.conj(1.0 / self.chi) * np.eye(self.G.shape[0]) - G_weighted.conj().T
+            )
+            s1_qcqp = sqrtW * (ei_des / 2)
+            A2_dense = sp.eye(self.Ndes, dtype=complex)
+
+            self.QCQP = DenseSharedProjQCQP(
+                self.A0,
+                self.s0,
+                self.c0,
+                A1_dense,
+                s1_qcqp,
+                self.Plist,
+                A2=A2_dense,
+                verbose=int(verbose),
+            )
 
     def get_ei(
         self, ji: Optional[ComplexGrid] = None, update: bool = False
@@ -253,94 +383,6 @@ class Photonics_FDFD(ABC):
     def set_ei(self, ei: ComplexArray) -> None:
         """Set the incident electromagnetic field."""
         self.ei = ei
-
-    def setup_QCQP(self, Pdiags: str = "global", verbose: float = 0) -> None:
-        """
-        Set up the quadratically constrained quadratic programming (QCQP) problem.
-
-        Parameters
-        ----------
-        Pdiags : str or ndarray, optional
-            Specification for projection matrix diagonals. If "global", creates
-            global projectors with ones and -1j entries. Default: "global"
-        verbose : float, optional
-            Verbosity level for debugging output. Default: 0
-
-        Notes
-        -----
-        For sparse QCQP, creates SparseSharedProjQCQP with transformed matrices.
-        For dense QCQP, creates DenseSharedProjQCQP with original matrices.
-
-        Raises
-        ------
-        AttributeError
-            If required attributes (des_mask, A0, s0, c0) are not defined.
-        ValueError
-            If neither ji nor ei is specified, or if Pdiags specification is invalid.
-        """
-        from dolphindes.util import check_attributes
-
-        check_attributes(self, "des_mask", "A0", "s0", "c0")
-
-        assert self.des_mask is not None
-        self.Ndes = int(np.sum(self.des_mask))
-        des_mask_flat = self._get_des_mask_flat()
-
-        if (self.ji is None) and (self.ei is None):
-            raise AttributeError("an initial current ji or field ei must be specified.")
-        if self.ji is not None and self.ei is not None:
-            warnings.warn("If both ji and ei are specified then ji is ignored.")
-
-        self.get_ei(self.ji, update=True)
-
-        if Pdiags == "global":
-            I = sp.eye_array(self.Ndes, dtype=complex, format="csc")
-            self.Plist = [I, (-1j) * I]
-        else:
-            raise ValueError("Not a valid Pdiags specification / needs implementation")
-
-        assert self.chi is not None
-        assert self.ei is not None
-
-        ei_des = self.ei.flatten(order=self._flatten_order)[des_mask_flat]
-
-        if self.sparseQCQP:
-            if (self.Ginv is None) or (self.M is None):
-                self.setup_EM_operators()
-
-            assert self.Ginv is not None
-            A1_sparse = sp.csc_array(
-                np.conj(1.0 / self.chi) * self.Ginv.conj().T - sp.eye(self.Ndes)
-            )
-            A2_sparse = sp.csc_array(self.Ginv)
-
-            self.QCQP = SparseSharedProjQCQP(
-                self.A0,
-                self.s0,
-                self.c0,
-                A1_sparse,
-                A2_sparse,
-                ei_des / 2,
-                self.Plist,
-                verbose=int(verbose),
-            )
-        else:
-            if self.G is None:
-                self.setup_EM_operators()
-
-            assert self.G is not None
-            A1_dense = (
-                np.conj(1.0 / self.chi) * np.eye(self.G.shape[0]) - self.G.conj().T
-            )
-            self.QCQP = DenseSharedProjQCQP(
-                self.A0,
-                self.s0,
-                self.c0,
-                A1_dense,
-                ei_des / 2,
-                self.Plist,
-                verbose=int(verbose),
-            )
 
     def bound_QCQP(
         self,
