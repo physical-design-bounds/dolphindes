@@ -94,7 +94,7 @@ class CartesianFDFDGeometry(GeometryHyperparameters):
         ndarray of float
             Flattened array of pixel areas (all equal to dx * dy).
         """
-        return np.full(self.Nx * self.Ny, self.dx * self.dy, dtype=np.float64)
+        return np.full(self.Nx * self.Ny, self.dx * self.dy, dtype=float)
 
 
 @dataclass

@@ -42,6 +42,8 @@ docs = [
     "myst-parser",
 ]
 
+[tool.setuptools]
+packages = ["dolphindes"]
 
 # -----------------------------
 # Import sorting: isort

@@ -185,18 +185,29 @@ class TM_Polar_FDFD(Maxwell_Polar_FDFD):
         # Azimuthal part with symmetry/Bloch boundary conditions
         phase_factor = np.exp(1j * bloch_phase)
 
+        if Nphi == 1:
+            az_diags = [np.array([phase_factor + np.conj(phase_factor) - 2.0])]
+            az_offsets = [0]
+        else:
+            az_diags = [
+                -2 * np.ones(Nphi, dtype=complex),
+                np.ones(Nphi - 1, dtype=complex),
+                np.ones(Nphi - 1, dtype=complex),
+            ]
+            az_offsets = [0, 1, -1]
+
+            if Nphi == 2:
+                az_diags[1][0] += np.conj(phase_factor)
+                az_diags[2][0] += phase_factor
+            else:
+                az_diags.append(np.array([np.conj(phase_factor)]))
+                az_offsets.append(Nphi - 1)
+                az_diags.append(np.array([phase_factor]))
+                az_offsets.append(-(Nphi - 1))
+
         L += (
             sp.kron(
-                sp.diags_array(
-                    [
-                        [phase_factor],
-                        np.ones(Nphi - 1),
-                        -2 * np.ones(Nphi),
-                        np.ones(Nphi - 1),
-                        [np.conj(phase_factor)],
-                    ],
-                    offsets=[-(Nphi - 1), -1, 0, 1, Nphi - 1],
-                ),
+                sp.diags_array(az_diags, offsets=az_offsets, shape=(Nphi, Nphi)),
                 sp.diags_array(1.0 / rcplx_grid**2),
                 format="csr",
             )
@@ -443,8 +454,15 @@ def plot_real_polar_field(
     log_eps: float = 1e-12,
 ) -> None:
     """Plot a real-valued polar field."""
+    if len(phi_grid) == 1:
+        # Handle 1D radial case by expanding to full circle for visualization
+        field_mesh = _as_polar_mesh(field, phi_grid, r_grid)
+        phi_grid = np.linspace(0, 2 * np.pi, 361, endpoint=True)
+        field_mesh = np.tile(field_mesh, (1, len(phi_grid)))
+    else:
+        field_mesh = _as_polar_mesh(field, phi_grid, r_grid)
+
     r_mesh, phi_mesh = np.meshgrid(r_grid, phi_grid, indexing="ij")
-    field_mesh = _as_polar_mesh(field, phi_grid, r_grid)
 
     norm = None
     if use_log:
@@ -491,8 +509,15 @@ def plot_cplx_polar_field(
     linscale: float = 1.0,
 ) -> None:
     """Plot real and imaginary parts of a complex field side by side."""
+    if len(phi_grid) == 1:
+        # Handle 1D radial case by expanding to full circle for visualization
+        field_mesh = _as_polar_mesh(field, phi_grid, r_grid)
+        phi_grid = np.linspace(0, 2 * np.pi, 361, endpoint=True)
+        field_mesh = np.tile(field_mesh, (1, len(phi_grid)))
+    else:
+        field_mesh = _as_polar_mesh(field, phi_grid, r_grid)
+
     r_mesh, phi_mesh = np.meshgrid(r_grid, phi_grid, indexing="ij")
-    field_mesh = _as_polar_mesh(field, phi_grid, r_grid)
 
     norm: colors.Normalize
     if use_log:

@@ -239,7 +239,9 @@ class Photonics_FDFD(ABC):
         if c0 is not None:
             self.c0 = c0
 
-    def setup_QCQP(self, Pdiags: str = "global", verbose: float = 0) -> None:
+    def setup_QCQP(
+        self, Pdiags: str = "global", verbose: float = 0, phase: float | None = None
+    ) -> None:
         """
         Set up the quadratically constrained quadratic programming (QCQP) problem.
 
@@ -282,6 +284,11 @@ class Photonics_FDFD(ABC):
         if Pdiags == "global":
             Id = sp.eye_array(self.Ndes, dtype=complex, format="csc")
             self.Plist = [Id, (-1j) * Id]
+        elif Pdiags == "phase":
+            if phase is None:
+                raise ValueError("phase argument must be specified for Pdiags='phase'")
+            Id = sp.eye_array(self.Ndes, dtype=complex, format="csc")
+            self.Plist = [np.exp(1j * phase) * Id]
         else:
             raise ValueError("Not a valid Pdiags specification / needs implementation")
 
