@@ -1,12 +1,13 @@
-import pytest
 import numpy as np
 import scipy.sparse as sp
-from dolphindes.photonics import Photonics_TM_FDFD, CartesianFDFDGeometry
+
+from dolphindes.geometry import CartesianFDFDGeometry
+from dolphindes.photonics import Photonics_TM_FDFD
 
 
 def test_Photonics_TM_FDFD_adjoint():
     """
-    use a planewave absorption problem to test setup and adjoint gradient
+    Use a planewave absorption problem to test setup and adjoint gradient
     of Photonics_TM_FDFD
     """
     ## wavelength, geometry and materials of the planewave absorption problem ##
@@ -20,7 +21,7 @@ def test_Photonics_TM_FDFD_adjoint():
 
     des_x = 1.5
     des_y = 1.5  # size of the design region for the absorbing structure
-    pmlsep = 1.0
+    pmlsep = 0.5
     pmlthick = 0.5
     Mx = int(des_x / dl)
     My = int(des_y / dl)
@@ -53,14 +54,7 @@ def test_Photonics_TM_FDFD_adjoint():
 
     ## setup geometry
     geometry = CartesianFDFDGeometry(
-        Nx=Nx,
-        Ny=Ny,
-        Npmlx=Npmlx,
-        Npmly=Npmly,
-        dx=dl,
-        dy=dl,
-        bloch_x=0.0,
-        bloch_y=0.0
+        Nx=Nx, Ny=Ny, Npmlx=Npmlx, Npmly=Npmly, dx=dl, dy=dl, bloch_x=0.0, bloch_y=0.0
     )
 
     ## setup Photonics_TM_FDFD objects
@@ -76,7 +70,6 @@ def test_Photonics_TM_FDFD_adjoint():
     abs_problem_sparse.get_ei(ji, update=True)
     abs_problem_sparse.set_objective(A0=A0_p, s0=s0_p, c0=c0, denseToSparse=True)
 
-    ## adding non-trivial chi_background makes setup_EM_operators very slow
     abs_problem_dense = Photonics_TM_FDFD(
         omega=omega,
         geometry=geometry,

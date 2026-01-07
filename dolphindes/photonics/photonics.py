@@ -5,27 +5,40 @@ Provides TM and TE polarization FDFD solvers that bridge the QCQP Dual Problem
 Interface in cvxopt and the Maxwell Solvers in maxwell.
 """
 
-__all__ = ["Photonics_TM_FDFD", "Photonics_TE_Yee_FDFD", "chi_to_feasible_rho"]
+__all__ = [
+    "Photonics_TM_FDFD",
+    "Photonics_TE_Yee_FDFD",
+    "chi_to_feasible_rho",
+]
 
 import warnings
-from typing import Any, Callable, Optional, Tuple, Union
+from typing import Callable, Optional, Tuple, Union, cast
 
 import numpy as np
 import scipy.sparse as sp
 import scipy.sparse.linalg as spla
 from numpy.typing import NDArray
 
-from dolphindes.cvxopt import DenseSharedProjQCQP, SparseSharedProjQCQP
-from dolphindes.maxwell import TM_FDFD
-from dolphindes.types import BoolGrid, ComplexArray, ComplexGrid, FloatNDArray
+from dolphindes.geometry import (
+    CartesianFDFDGeometry,
+    GeometryHyperparameters,
+    PolarFDFDGeometry,
+)
+from dolphindes.maxwell import TM_FDFD, TM_Polar_FDFD
+from dolphindes.types import (
+    BoolGrid,
+    ComplexArray,
+    ComplexGrid,
+    FloatNDArray,
+)
 from dolphindes.util import check_attributes
 
-from ._base_photonics import CartesianFDFDGeometry, Photonics_FDFD
+from ._base_photonics import Photonics_FDFD
 
 
 class Photonics_TM_FDFD(Photonics_FDFD):
     """
-    TM polarization FDFD photonics problem.
+    TM polarization FDFD photonics problem (Cartesian or Polar).
 
     Attributes
     ----------
@@ -36,7 +49,7 @@ class Photonics_TM_FDFD(Photonics_FDFD):
         Green's function (dense QCQP).
     M : csc_array or None
         Maxwell operator.
-    EM_solver : TM_FDFD or None
+    EM_solver : TM_FDFD or TM_Polar_FDFD or None
         Electromagnetic field solver.
     structure_objective : Callable
         Function for structure optimization objective.
@@ -45,7 +58,7 @@ class Photonics_TM_FDFD(Photonics_FDFD):
     def __init__(
         self,
         omega: complex,
-        geometry: Optional[CartesianFDFDGeometry] = None,
+        geometry: CartesianFDFDGeometry | PolarFDFDGeometry,
         chi: Optional[complex] = None,
         des_mask: Optional[BoolGrid] = None,
         ji: Optional[ComplexGrid] = None,
@@ -63,8 +76,8 @@ class Photonics_TM_FDFD(Photonics_FDFD):
         ----------
         omega : complex
             Circular frequency.
-        geometry : CartesianFDFDGeometry, optional
-            Cartesian geometry specification.
+        geometry : CartesianFDFDGeometry or PolarFDFDGeometry
+            Geometry specification.
         chi : complex, optional
             Bulk susceptibility of material.
         des_mask : ndarray of bool, optional
@@ -88,10 +101,15 @@ class Photonics_TM_FDFD(Photonics_FDFD):
         self.Ginv: Optional[sp.csc_array] = None
         self.G: Optional[ComplexArray] = None
         self.M: Optional[sp.csc_array] = None
-        self.EM_solver: Optional[TM_FDFD] = None
+        self.EM_solver: Optional[Union[TM_FDFD, TM_Polar_FDFD]] = None
         self.Ndes: Optional[int] = None
         self.Plist: Optional[list] = None
         self.dense_s0: Optional[ComplexArray] = None
+
+        if isinstance(geometry, CartesianFDFDGeometry):
+            self._flatten_order = "C"
+        elif isinstance(geometry, PolarFDFDGeometry):
+            self._flatten_order = "F"
 
         super().__init__(
             omega,
@@ -109,20 +127,9 @@ class Photonics_TM_FDFD(Photonics_FDFD):
 
         try:
             check_attributes(self, "omega", "geometry", "chi", "des_mask", "sparseQCQP")
-            check_attributes(
-                self.geometry,
-                "Nx",
-                "Ny",
-                "Npmlx",
-                "Npmly",
-                "dx",
-                "dy",
-                "bloch_x",
-                "bloch_y",
-            )
-            self.setup_EM_solver()
+            self.setup_EM_solver(geometry)
             self.setup_EM_operators()
-        except AttributeError as e:
+        except AttributeError:
             warnings.warn(
                 "Photonics_TM_FDFD initialized with missing attributes "
                 "(lazy initialization). "
@@ -145,91 +152,54 @@ class Photonics_TM_FDFD(Photonics_FDFD):
             f"sparseQCQP={self.sparseQCQP})"
         )
 
-    def set_objective(
-        self,
-        A0: Optional[Union[ComplexArray, sp.csc_array]] = None,
-        s0: Optional[ComplexArray] = None,
-        c0: Optional[float] = None,
-        denseToSparse: bool = False,
+    def setup_EM_solver(
+        self, geometry: Optional[GeometryHyperparameters] = None
     ) -> None:
-        """
-        Set the QCQP objective function parameters.
-
-        Not specifying a particular parameter leaves it unchanged.
-
-        Parameters
-        ----------
-        A0 : ndarray of complex or scipy.sparse.csc_array, optional
-            The matrix A0 in the QCQP objective function.
-        s0 : ndarray of complex, optional
-            The vector s0 in the QCQP objective function.
-        c0 : float, optional
-            The constant c0 in the QCQP objective function. Default: 0.0
-        denseToSparse : bool, optional
-            If True, treat input A0 and s0 as describing forms
-            of the polarization p, and convert them to the equivalent forms
-            of (Gp) before assigning to the class attributes. Default: False
-        """
-        if denseToSparse:
-            if not self.sparseQCQP:
-                raise ValueError(
-                    "sparseQCQP needs to be True to use dense-to-sparse conversion."
-                )
-            if A0 is not None:
-                assert self.Ginv is not None
-                self.A0 = self.Ginv.T.conj() @ sp.csc_array(A0) @ self.Ginv
-            if s0 is not None:
-                assert self.Ginv is not None
-                self.dense_s0 = s0
-                self.s0 = self.Ginv.T.conj() @ s0
-        else:
-            if A0 is not None:
-                self.A0 = A0
-            if s0 is not None:
-                self.s0 = s0
-                self.dense_s0 = None
-
-        if c0 is not None:
-            self.c0 = c0
-
-    def setup_EM_solver(self, geometry: Optional[CartesianFDFDGeometry] = None) -> None:
         """
         Set up the FDFD electromagnetic solver with given geometry.
 
         Parameters
         ----------
-        geometry : CartesianFDFDGeometry, optional
+        geometry : CartesianFDFDGeometry or PolarFDFDGeometry
             Geometry specification. If None, uses self.geometry.
 
         Notes
         -----
-        Creates a TM_FDFD solver instance and stores it in self.EM_solver.
+        Creates a TM_FDFD or TM_Polar_FDFD solver instance and stores it in
+        self.EM_solver.
         """
         if geometry is not None:
             self.geometry = geometry
 
         assert self.geometry is not None
-        check_attributes(
-            self.geometry,
-            "Nx",
-            "Ny",
-            "Npmlx",
-            "Npmly",
-            "dx",
-            "dy",
-            "bloch_x",
-            "bloch_y",
-        )
-        self.EM_solver = TM_FDFD(
-            self.omega,
-            self.geometry.Nx,
-            self.geometry.Ny,
-            self.geometry.Npmlx,
-            self.geometry.Npmly,
-            self.geometry.dx,
-            self.geometry.bloch_x,
-            self.geometry.bloch_y,
-        )
+        if isinstance(self.geometry, CartesianFDFDGeometry):
+            self._flatten_order = "C"
+            check_attributes(
+                self.geometry,
+                "Nx",
+                "Ny",
+                "Npmlx",
+                "Npmly",
+                "dx",
+                "dy",
+                "bloch_x",
+                "bloch_y",
+            )
+            self.EM_solver = TM_FDFD(self.omega, self.geometry)
+        elif isinstance(self.geometry, PolarFDFDGeometry):
+            self._flatten_order = "F"
+            check_attributes(
+                self.geometry,
+                "Nr",
+                "Nphi",
+                "Npml",
+                "dr",
+                "n_sectors",
+                "bloch_phase",
+            )
+            self.EM_solver = TM_Polar_FDFD(self.omega, self.geometry)
+        else:
+            raise TypeError(f"Unsupported geometry type: {type(self.geometry)}")
 
     def setup_EM_operators(self) -> None:
         """
@@ -264,224 +234,19 @@ class Photonics_TM_FDFD(Photonics_FDFD):
                     self.chi_background
                 )
                 assert self.des_mask is not None
-                Id = np.diag(self.des_mask.astype(complex).flatten())[
-                    :, self.des_mask.flatten()
-                ]
+                Id = np.diag(
+                    self.des_mask.astype(complex).flatten(order=self._flatten_order)
+                )[:, self.des_mask.flatten(order=self._flatten_order)]
                 self.G = (
                     self.omega**2
-                    * np.linalg.solve(self.M.toarray(), Id)[self.des_mask.flatten(), :]
+                    * np.linalg.solve(self.M.toarray(), Id)[
+                        self.des_mask.flatten(order=self._flatten_order), :
+                    ]
                 )
 
-    def get_ei(
-        self, ji: Optional[ComplexGrid] = None, update: bool = False
-    ) -> ComplexGrid:
-        """
-        Get or compute the incident electromagnetic field.
-
-        Parameters
-        ----------
-        ji : ndarray of complex, optional
-            Current source for computing incident field. If None, uses self.ji.
-        update : bool, optional
-            Whether to update self.ei with the computed field. Default: False
-
-        Returns
-        -------
-        ei : ndarray of complex
-            The incident electromagnetic field. If self.ei exists, returns it directly.
-            Otherwise computes it using the EM solver.
-        """
-        assert self.EM_solver is not None
-        if self.ei is None:
-            ei = (
-                self.EM_solver.get_TM_field(ji, self.chi_background)
-                if self.ji is None
-                else self.EM_solver.get_TM_field(self.ji, self.chi_background)
-            )
-        else:
-            ei = self.ei
-        if update:
-            self.ei = ei
-        return ei
-
-    def set_ei(self, ei: ComplexGrid) -> None:
-        """
-        Set the incident electromagnetic field.
-
-        Parameters
-        ----------
-        ei : ndarray of complex
-            The incident electromagnetic field to store.
-        """
-        self.ei = ei
-
-    def setup_QCQP(self, Pdiags: str = "global", verbose: float = 0) -> None:
-        """
-        Set up the quadratically constrained quadratic programming (QCQP) problem.
-
-        Parameters
-        ----------
-        Pdiags : str or ndarray, optional
-            Specification for projection matrix diagonals. If "global", creates
-            global projectors with ones and -1j entries. Default: "global"
-        verbose : float, optional
-            Verbosity level for debugging output. Default: 0
-
-        Notes
-        -----
-        For sparse QCQP, creates SparseSharedProjQCQP with transformed matrices.
-        For dense QCQP, creates DenseSharedProjQCQP with original matrices.
-
-        Raises
-        ------
-        AttributeError
-            If required attributes (des_mask, A0, s0, c0) are not defined.
-        ValueError
-            If neither ji nor ei is specified, or if Pdiags specification is invalid.
-        """
-        check_attributes(self, "des_mask", "A0", "s0", "c0")
-
-        # number of field degrees of freedom / pixels in design region
-        assert self.des_mask is not None
-        self.Ndes = int(np.sum(self.des_mask))
-
-        # generate initial field
-        if (self.ji is None) and (self.ei is None):
-            raise AttributeError("an initial current ji or field ei must be specified.")
-        if not (self.ji is None) and not (self.ei is None):
-            warnings.warn("If both ji and ei are specified then ji is ignored.")
-
-        self.get_ei(self.ji, update=True)
-
-        if Pdiags == "global":
-            # Build projectors as a list of matrices (new API)
-            # old behavior: two columns with [1, -1j] on the diagonal
-            I = sp.eye_array(self.Ndes, dtype=complex, format="csc")
-            self.Plist = [I, (-1j) * I]
-        else:
-            raise ValueError("Not a valid Pdiags specification / needs implementation")
-
-        assert self.chi is not None
-        assert self.ei is not None
-        if (
-            self.sparseQCQP
-        ):  # rewrite later when sparse and dense QCQP classes are unified
-            if (self.Ginv is None) or (self.M is None):
-                self.setup_EM_operators()
-
-            assert self.Ginv is not None
-            A1_sparse = sp.csc_array(
-                np.conj(1.0 / self.chi) * self.Ginv.conj().T - sp.eye(self.Ndes)
-            )
-            A2_sparse = sp.csc_array(self.Ginv)
-
-            self.QCQP = SparseSharedProjQCQP(
-                self.A0,
-                self.s0,
-                self.c0,
-                A1_sparse,
-                A2_sparse,
-                self.ei[self.des_mask] / 2,
-                self.Plist,
-                verbose=int(verbose),
-            )
-        else:
-            if self.G is None:
-                self.setup_EM_operators()
-
-            assert self.G is not None
-            A1_dense = (
-                np.conj(1.0 / self.chi) * np.eye(self.G.shape[0]) - self.G.conj().T
-            )
-            print(
-                self.A0.shape,
-                self.s0.shape,
-                self.c0,
-                A1_dense.shape,
-                self.ei[self.des_mask].shape,
-            )
-            self.QCQP = DenseSharedProjQCQP(
-                self.A0,
-                self.s0,
-                self.c0,
-                A1_dense,
-                self.ei[self.des_mask] / 2,
-                self.Plist,
-                verbose=int(verbose),
-            )  # for dense QCQP formulation A2 is not needed
-
-    def bound_QCQP(
-        self,
-        method: str = "bfgs",
-        init_lags: Optional[FloatNDArray] = None,
-        opt_params: Optional[dict[str, Any]] = None,
-    ) -> Tuple[float, FloatNDArray, FloatNDArray, Optional[FloatNDArray], ComplexArray]:
-        """
-        Calculate a bound on the QCQP dual problem.
-
-        Parameters
-        ----------
-        method : str, optional
-            Optimization method to use. Options: 'bfgs', 'newton'. Default: 'bfgs'
-        init_lags : ndarray of float, optional
-            Initial Lagrange multipliers for optimization. If None, finds feasible point.
-        opt_params : dict, optional
-            Additional parameters for the optimization algorithm.
-
-        Returns
-        -------
-        result : tuple
-            Result from QCQP dual problem solver containing:
-            (dual_value, lagrange_multipliers, gradient, hessian, primal_variable)
-        """
-        assert self.QCQP is not None
-        return self.QCQP.solve_current_dual_problem(
-            method=method, init_lags=init_lags, opt_params=opt_params
-        )
-
     def get_chi_inf(self) -> ComplexArray:
-        """
-        Get the inferred susceptibility from the QCQP dual solution.
-
-        Returns
-        -------
-        chi_inf : ndarray of complex
-            The inferred susceptibility χ_inf = P / E_total, where P is the
-            polarization current and E_total is the total electric field.
-
-        Notes
-        -----
-        This represents the material susceptibility that would be required to
-        achieve the optimal field distribution found by the QCQP solver.
-        The inferred chi may not be physically feasible for nonzero duality gap.
-
-        Raises
-        ------
-        AssertionError
-            If QCQP has not been initialized or solved yet.
-        """
-        assert hasattr(self, "QCQP"), (
-            "QCQP not initialized. Initialize and solve QCQP first."
-        )
-        assert self.QCQP is not None
-        assert self.QCQP.current_xstar is not None, (
-            "Inferred chi not available before solving QCQP dual"
-        )
-        assert self.des_mask is not None
-
-        P: ComplexArray
-        Es: ComplexArray
-        if self.sparseQCQP:
-            assert self.QCQP.A2 is not None
-            P = self.QCQP.A2 @ self.QCQP.current_xstar  # Calculate polarization current
-            Es = self.QCQP.current_xstar
-        else:
-            assert self.G is not None
-            P = self.QCQP.current_xstar
-            Es = self.G @ P
-
-        Etotal = self.get_ei()[self.des_mask] + Es
-        return P / Etotal
+        """Get the inferred susceptibility from the QCQP dual solution."""
+        return super().get_chi_inf()
 
     def _get_dof_chigrid_M_es(
         self, dof: NDArray[np.floating]
@@ -500,6 +265,9 @@ class Photonics_TM_FDFD(Photonics_FDFD):
             (chigrid_dof, M_dof, es) - susceptibility grid, Maxwell operator,
             scattered field.
         """
+        if isinstance(self.geometry, PolarFDFDGeometry):
+            raise NotImplementedError("Not implemented for Polar geometry yet.")
+
         assert self.geometry is not None
         assert self.des_mask is not None
         assert self.chi is not None
@@ -544,6 +312,9 @@ class Photonics_TM_FDFD(Photonics_FDFD):
         obj : float
             The design objective for the structure specified by dof.
         """
+        if isinstance(self.geometry, PolarFDFDGeometry):
+            raise NotImplementedError("Not implemented for Polar geometry yet.")
+
         assert self.geometry is not None
         assert self.des_mask is not None
         assert self.A0 is not None
@@ -586,6 +357,9 @@ class Photonics_TM_FDFD(Photonics_FDFD):
         obj : float
             Design objective value.
         """
+        if isinstance(self.geometry, PolarFDFDGeometry):
+            raise NotImplementedError("Not implemented for Polar geometry yet.")
+
         assert self.geometry is not None
         assert self.des_mask is not None
         assert self.A0 is not None
@@ -624,16 +398,13 @@ class Photonics_TE_Yee_FDFD(Photonics_FDFD):
     """TE polarization FDFD photonics problem (placeholder)."""
 
     def __init__(self) -> None:
-        """Initialize placeholder."""
         pass
 
 
 # Utility functions for photonics problems
 
 
-def chi_to_feasible_rho(
-    chi_inf: ComplexArray, chi_design: complex
-) -> NDArray[np.floating]:
+def chi_to_feasible_rho(chi_inf: ComplexArray, chi_design: complex) -> FloatNDArray:
     """
     Project the inferred chi to the feasible set defined by chi_design.
 
@@ -641,7 +412,7 @@ def chi_to_feasible_rho(
 
     Parameters
     ----------
-    chi_inf : ndarray of complex
+    chi_inf : ComplexArray
         Inferred chi from Verlan optimization.
     chi_design : complex
         The design susceptibility of the problem.
@@ -653,4 +424,4 @@ def chi_to_feasible_rho(
     """
     rho = np.real(chi_inf.conj() * chi_design) / np.abs(chi_design) ** 2
     rho = np.clip(rho, 0, 1)
-    return rho
+    return cast(FloatNDArray, rho)
