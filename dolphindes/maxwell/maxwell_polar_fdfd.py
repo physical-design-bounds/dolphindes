@@ -306,7 +306,7 @@ class TM_Polar_FDFD(Maxwell_Polar_FDFD):
         )
         return self.phi_grid, self.r_grid, phi_grid_full
 
-    def get_TM_G_od(
+    def get_TM_Gba(
         self,
         design_mask: BoolGrid,
         observe_mask: BoolGrid,
@@ -314,7 +314,7 @@ class TM_Polar_FDFD(Maxwell_Polar_FDFD):
         """
         Compute vacuum Green's function from design to observation region.
 
-        Convention: E_obs = (i/ω) * G_od @ J
+        Convention: E_obs = (i/ω) * G_ba @ J
         This means it is a propagator (i.e., it already contains its integral).
         Thus, G is scaled so we do not need to modify the field by areas before
         applying it.
@@ -328,7 +328,7 @@ class TM_Polar_FDFD(Maxwell_Polar_FDFD):
 
         Returns
         -------
-        G_od : ComplexArray
+        G_ba : ComplexArray
             Green's function matrix (N_obs x N_design).
         """
 
