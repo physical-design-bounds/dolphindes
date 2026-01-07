@@ -26,6 +26,7 @@ from dolphindes.util import math_utils, print_underline
 # So what are the components?
 # First,
 
+
 @dataclass(frozen=True)
 class VerlanHyperparameters:
     """Hyperparameters for Verlan algorithm.
@@ -121,7 +122,7 @@ def run_verlan(
     verlan_params: VerlanHyperparameters = VerlanHyperparameters(),
 ) -> "_SharedProjQCQP":
     assert QCQP is not None, "QCQP must be initialized to run verlan."
-    assert QCQP.is_strongly_dual is not None, (
+    assert QCQP.strong_duality_checker is not None, (
         "QCQP must have strong duality checker defined."
     )
     tmp_QCQP = copy.deepcopy(QCQP)
