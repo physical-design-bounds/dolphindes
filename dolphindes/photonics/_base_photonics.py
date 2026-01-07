@@ -435,11 +435,16 @@ class Photonics_FDFD(ABC):
         Es: ComplexArray
         if self.sparseQCQP:
             assert self.QCQP.A2 is not None
+            # In sparse mode, x = Es and A2 = Ginv. Use A2 to map to P_phys.
+            # Area scaling is handled in the constraint matrices (A1, s0), not the variable.
             P = self.QCQP.A2 @ self.QCQP.current_xstar
             Es = self.QCQP.current_xstar
         else:
             assert self.G is not None
-            P = self.QCQP.current_xstar
+            # In dense mode, x = sqrt(W) * P_phys. We must unscale to get P_phys.
+            areas = self.geometry.get_pixel_areas()[des_mask_flat]
+            invSqrtW = 1.0 / np.sqrt(areas)
+            P = self.QCQP.current_xstar * invSqrtW
             Es = self.G @ P
 
         Etotal = self.get_ei().flatten(order=self._flatten_order)[des_mask_flat] + Es

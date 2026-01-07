@@ -249,9 +249,6 @@ class Photonics_TM_FDFD(Photonics_FDFD):
 
     def get_chi_inf(self) -> ComplexArray:
         """Get the inferred susceptibility from the QCQP dual solution."""
-        raise NotImplementedError("get_chi_inf not yet implemented for FDFD.")
-        if isinstance(self.geometry, PolarFDFDGeometry):
-            raise NotImplementedError("get_chi_inf not yet implemented for polar FDFD.")
         return super().get_chi_inf()
 
     def _get_dof_chigrid_M_es(
