@@ -80,7 +80,7 @@ class SparseSharedProjQCQP(_SharedProjQCQP):
         Objective constant.
     c_2j : FloatNDArray
         Real constants for general constraints (length matches B_j).
-    Proj : Projectors
+    Proj : :class:`dolphindes.util.Projectors`
         dolphindes Projectors object representing all projector matrices P_j.
     n_gen_constr : int
         Number of general constraints (len(B_j)).

@@ -7,7 +7,6 @@ import scipy.sparse as sp
 import scipy.sparse.linalg as spla
 from numpy.typing import ArrayLike, NDArray
 
-from dolphindes.cvxopt import gcd
 from dolphindes.types import ComplexArray, FloatNDArray, SparseDense
 from dolphindes.util import Projectors, Sym
 
@@ -57,7 +56,7 @@ class _SharedProjQCQP(ABC):
         Linear term vectors for general constraints.
     c_2j : ArrayLike
         Constant terms for general constraints.
-    Proj : Projectors
+    Proj : :class:`dolphindes.util.Projectors`
         dolphindes Projectors object representing all projector matrices P_j.
     verbose : int
         Verbosity level (0 = silent).
@@ -742,6 +741,7 @@ class _SharedProjQCQP(ABC):
             Number of leading projector constraints to merge.
         """
         from . import gcd as _gcd
+
         _gcd.merge_lead_constraints(self, merged_num=merged_num)
 
     def add_constraints(
@@ -758,6 +758,7 @@ class _SharedProjQCQP(ABC):
             Whether to orthonormalize constraint set after insertion.
         """
         from . import gcd as _gcd
+
         _gcd.add_constraints(
             self, added_Pdata_list=added_Pdata_list, orthonormalize=orthonormalize
         )
@@ -777,8 +778,10 @@ class _SharedProjQCQP(ABC):
         """
         if gcd_params is None:
             from .gcd import GCDHyperparameters as _GCDHyperparameters
+
             gcd_params = _GCDHyperparameters()
         from . import gcd as _gcd
+
         _gcd.run_gcd(self, gcd_params)
 
     def refine_projectors(self) -> Tuple[Any, NDArray[np.float64]]:

@@ -190,7 +190,7 @@ class Projectors:
 
     def get_Pdata_column_stack(self) -> ComplexArray:
         """Extract all sparse P_j entries according to Pstruct.
-        
+
         Orders as columns of a (nnz,k) matrix.
         Returns a matrix whose j-th column is P_j[Pstruct]
         """
@@ -203,8 +203,9 @@ class Projectors:
         P_stackV_fullsize_template.data[:] = 0.0
         # template needed because individual P_j may be sparser than Pstruct
         Pdata_stack = (P_stackV_fullsize_template + self.P_stackV).data
-        return cast(ComplexArray, 
-                    Pdata_stack.reshape((self.Pstruct.size, self._k), order="F"))
+        return cast(
+            ComplexArray, Pdata_stack.reshape((self.Pstruct.size, self._k), order="F")
+        )
 
     def set_Pdata_column_stack(self, Pdata: SparseDense) -> None:
         """Set projectors from column-stacked sparse entries.
@@ -237,7 +238,7 @@ class Projectors:
     def allP_at_v(self, v: ComplexArray, dagger: bool = False) -> ComplexArray:
         """Compute all P_j @ v (or P_j^† @ v) and return an (n, k) matrix.
 
-        Returns a matrix whose j-th column is P_j v (dagger=False) 
+        Returns a matrix whose j-th column is P_j v (dagger=False)
         or P_j^† v (dagger=True).
         For diagonal projectors, dagger reduces to conjugation:
           allP_at_v(v, dagger=True) == (Pdiags.conj().T * v).T  (shape (n, k)).
@@ -255,7 +256,7 @@ class Projectors:
         else:
             stacked = self.P_stackV @ v
         # (n, k)
-        return cast(ComplexArray, stacked.reshape((self._n, self._k), order="F"))  
+        return cast(ComplexArray, stacked.reshape((self._n, self._k), order="F"))
 
     def weighted_sum_on_vector(
         self,

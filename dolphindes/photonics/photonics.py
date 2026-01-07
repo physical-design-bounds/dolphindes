@@ -42,15 +42,21 @@ class Photonics_TM_FDFD(Photonics_FDFD):
 
     Attributes
     ----------
-    All attributes from Photonics_FDFD plus:
+    EM_solver : :class:`dolphindes.maxwell.TM_FDFD` | None
+        Electromagnetic field solver.
+    QCQP : :class:`dolphindes.cvxopt.qcqp.SparseSharedProjQCQP` | :class:`dolphindes.cvxopt.qcqp.DenseSharedProjQCQP` | None
+        QCQP instance for optimization.
     Ginv : csc_array or None
         Inverse Green's function (sparse QCQP).
     G : ndarray of complex or None
         Green's function (dense QCQP).
     M : csc_array or None
         Maxwell operator.
+    <<<<<<< HEAD
     EM_solver : TM_FDFD or TM_Polar_FDFD or None
         Electromagnetic field solver.
+    =======
+    >>>>>>> d181ef1 (improved documentation)
     structure_objective : Callable
         Function for structure optimization objective.
     """
