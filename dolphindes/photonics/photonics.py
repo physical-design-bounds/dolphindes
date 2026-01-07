@@ -228,10 +228,7 @@ class Photonics_TM_FDFD(Photonics_FDFD):
         else:
             if self.chi_background is None:
                 self.M = self.EM_solver.M0
-                if isinstance(self.geometry, CartesianFDFDGeometry):
-                    self.G = self.EM_solver.get_TM_Gba(self.des_mask, self.des_mask)
-                elif isinstance(self.geometry, PolarFDFDGeometry):
-                    self.G = self.EM_solver.get_TM_G_od(self.des_mask, self.des_mask)
+                self.G = self.EM_solver.get_TM_Gba(self.des_mask, self.des_mask)
             else:
                 self.M = self.EM_solver.M0 + self.EM_solver._get_diagM_from_chigrid(
                     self.chi_background

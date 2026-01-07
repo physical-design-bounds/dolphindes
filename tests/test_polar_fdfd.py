@@ -93,7 +93,7 @@ class TestPolarGreensFunction:
     def test_greens_function_vs_direct_solve(self, greens_setup):
         """Test that Green's function matches direct solve results."""
         solver, design_mask, observe_mask = greens_setup
-        G = solver.get_TM_G_od(design_mask, observe_mask)
+        G = solver.get_TM_Gba(design_mask, observe_mask)
 
         area_vec = solver.geometry.get_pixel_areas()
         design_lin = np.nonzero(design_mask.flatten(order="F"))[0]
@@ -139,7 +139,7 @@ class TestPolarGreensFunction:
     ):
         """Test Green's function with various multi-source configurations."""
         solver, design_mask, observe_mask = greens_setup
-        G = solver.get_TM_G_od(design_mask, observe_mask)
+        G = solver.get_TM_Gba(design_mask, observe_mask)
 
         area_vec = solver.geometry.get_pixel_areas()
         design_lin = np.nonzero(design_mask.flatten(order="F"))[0]
@@ -197,7 +197,7 @@ class TestPolarGreensFunction:
             if 0.8 <= r <= 1.2:
                 observe_mask[ir, :] = True
 
-        G = solver.get_TM_G_od(design_mask, observe_mask)
+        G = solver.get_TM_Gba(design_mask, observe_mask)
 
         area_vec = solver.geometry.get_pixel_areas()
         design_lin = np.nonzero(design_mask.flatten(order="F"))[0]
@@ -279,7 +279,7 @@ class TestGaaInv:
         """Test that GaaInv @ Gaa is identity."""
         solver, design_mask = gaainv_setup
         GaaInv, _ = solver.get_GaaInv(design_mask)
-        Gaa = solver.get_TM_G_od(design_mask, design_mask)
+        Gaa = solver.get_TM_Gba(design_mask, design_mask)
 
         product = GaaInv @ Gaa
         identity = np.eye(product.shape[0])
