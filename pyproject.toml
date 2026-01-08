@@ -7,9 +7,9 @@ build-backend = "setuptools.build_meta"
 name = "dolphindes"
 version = "0.1.0"
 authors = [
-  { name="Your Name", email="your@email.com" },
+  { name="Dolphindes Contributors"},
 ]
-description = "A short description of your package."
+description = "A Python package for calculating limits on the performance of photonic devices using dual optimization methods."
 readme = "README.md"
 requires-python = ">=3.10"
 
@@ -18,10 +18,6 @@ dependencies = [
     "numpy",
     "scipy",
     "matplotlib",
-    "pyside6",
-    "requests",
-    "pyyaml",
-    "numba",
     "nlopt",
     "scikit-sparse",
 ]
@@ -33,8 +29,7 @@ dev = [
     "pytest-dependency",
     "ruff",
     "mypy",
-    "isort",
-    "ipykernel", # For Jupyter support
+    "ipykernel",
 ]
 docs = [
     "sphinx",
@@ -45,20 +40,13 @@ docs = [
 [tool.setuptools]
 packages = ["dolphindes"]
 
-# -----------------------------
-# Import sorting: isort
-# -----------------------------
-[tool.isort]
-profile = "black"
-line_length = 88
-skip_glob = ["*.ipynb"]
 
 # -----------------------------
 # Linting & Docstrings: Ruff
 # -----------------------------
 [tool.ruff]
 line-length = 88
-extend-exclude = ["*.ipynb"]  # skip notebooks
+extend-exclude = ["*.ipynb"]
 
 [tool.ruff.lint]
 # Enable general linting + docstring checks

@@ -1,22 +1,19 @@
 version: 2
 
-# Build environment
 build:
   os: ubuntu-22.04
-  # We MUST have the 'tools' key to pass validation.
-  # But it must be EMPTY to avoid conflict with 'conda:'.
-  tools: {} 
+  tools:
+    python: "mambaforge-22.9"
 
-# Use your conda environment file
 conda:
   environment: dolphindes.yml
 
-# Sphinx configuration
-# Now that 'build.commands' is gone,
-# this 'sphinx:' key will be used.
 sphinx:
   configuration: docs/conf.py
 
-# Optional formats
-formats:
-  - htmlzip
+python:
+  install:
+    - method: pip
+      path: .
+      extra_requirements:
+        - docs
