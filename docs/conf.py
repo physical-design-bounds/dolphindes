@@ -73,3 +73,4 @@ autodoc_typehints = "description"
 # }
 
 add_module_names = False
+nbsphinx_execute = "never"
