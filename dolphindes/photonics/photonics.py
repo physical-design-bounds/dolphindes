@@ -52,11 +52,8 @@ class Photonics_TM_FDFD(Photonics_FDFD):
         Green's function (dense QCQP).
     M : csc_array or None
         Maxwell operator.
-    <<<<<<< HEAD
     EM_solver : TM_FDFD or TM_Polar_FDFD or None
         Electromagnetic field solver.
-    =======
-    >>>>>>> d181ef1 (improved documentation)
     structure_objective : Callable
         Function for structure optimization objective.
     """
