@@ -4,6 +4,9 @@ build:
   os: ubuntu-22.04
   tools:
     python: "mambaforge-22.9"
+  apt_packages:
+    - graphviz
+    - pandoc
 
 conda:
   environment: dolphindes.yml

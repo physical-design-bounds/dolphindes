@@ -11,6 +11,7 @@ Welcome to Dolphindes's documentation!
    :caption: Contents:
 
    modules
+   tutorials
 
 Indices and tables
 ==================

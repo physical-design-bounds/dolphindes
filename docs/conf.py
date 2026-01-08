@@ -22,6 +22,7 @@ extensions = [
     "myst_parser",  # Parse Markdown files
     "nbsphinx",  # Parse Jupyter Notebooks
     "sphinx_automodapi.automodapi",  # Automated API documentation
+    "sphinx.ext.graphviz",
 ]
 
 # Add any paths that contain templates here, relative to this directory.
