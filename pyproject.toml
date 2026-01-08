@@ -36,6 +36,7 @@ docs = [
     "myst-parser",
     "sphinx-automodapi",
     "pydata-sphinx-theme",
+    "nbsphinx",
 ]
 
 [tool.setuptools]
