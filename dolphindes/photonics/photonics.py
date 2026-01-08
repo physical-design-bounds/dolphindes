@@ -42,7 +42,10 @@ class Photonics_TM_FDFD(Photonics_FDFD):
 
     Attributes
     ----------
-    All attributes from Photonics_FDFD plus:
+    EM_solver : :class:`dolphindes.maxwell.TM_FDFD` | None
+        Electromagnetic field solver.
+    QCQP : :class:`dolphindes.cvxopt.qcqp.SparseSharedProjQCQP` | :class:`dolphindes.cvxopt.qcqp.DenseSharedProjQCQP` | None
+        QCQP instance for optimization.
     Ginv : csc_array or None
         Inverse Green's function (sparse QCQP).
     G : ndarray of complex or None

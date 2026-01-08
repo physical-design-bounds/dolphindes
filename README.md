@@ -15,7 +15,13 @@ sudo apt-get update
 sudo apt-get install libsuitesparse-dev
 ``` 
 
-### 2. Setup and activate the provided conda environment dolphindes.yml
+### 2. Clone this repo and activate the provided conda environment dolphindes.yml
+
+### 3. If using your own environment, instead run
+
+```bash
+pip install .
+```
 
 ## 🔧 Running Tests
 
@@ -29,7 +35,7 @@ Optionally, provide the -s flag to print the output of the tests. You will need 
 
 ## 📚 Documentation and Tutorials
 
-We are currently working on more comprehensive documentation. For now, please refer to the Jupyter Notebooks in the examples/ directory for detailed demonstrations on using dolphindes to compute bounds for photonic inverse design problems and extract design templates. 
+Documentation may be found at [dolphindes.readthedocs.io](https://dolphindes.readthedocs.io)
 
 ## Citations
 

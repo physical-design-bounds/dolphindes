@@ -66,7 +66,7 @@ class Photonics_FDFD(ABC):
         The vector s0 in the QCQP field design objective.
     c0 : float
         The constant c0 in the QCQP field design objective.
-    QCQP : SparseSharedProjQCQP or DenseSharedProjQCQP or None
+    QCQP : :class:`dolphindes.cvxopt.qcqp.SparseSharedProjQCQP` | :class:`dolphindes.cvxopt.qcqp.DenseSharedProjQCQP` | None
         The QCQP instance for optimization.
     """
 

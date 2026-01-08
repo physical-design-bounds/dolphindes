@@ -1,13 +1,15 @@
 """
-Generalized Constraint Descent (GCD) methods below.
+Generalized Constraint Descent (GCD).
 
-GCD is a method for tightening dual bounds on a shared projection QCQP
-based on iteratively
-1. adding of new shared projection constraints that tighten the bound
-2. merging of old constraints that does not change the bound to keep total constraint
-   number small.
-For usage examples, see the notebooks examples/LDOS_gcd and examples/verlan/LDOS_verlan
-For more mathematical details, see Appendix B of https://arxiv.org/abs/2504.10469
+GCD tightens dual bounds for shared projection QCQPs by iteratively:
+1. Adding new shared projection constraints likely to tighten the bound.
+2. Merging older constraints to keep the total count small.
+
+For usage examples see:
+- examples/limits/LDOS.ipynb
+- examples/verlan/LDOS_verlan.ipynb
+
+Mathematical details: Appendix B of https://arxiv.org/abs/2504.10469
 """
 
 import numpy as np

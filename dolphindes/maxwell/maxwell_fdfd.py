@@ -477,8 +477,10 @@ class TM_FDFD(Maxwell_FDFD):
         Utilizes the Woodbury identity to perform inversion.
         We partition the full Maxwell operator M into blocks corresponding to region A
         (design) and its complement B (background):
+
             M = [[A, B],
                  [C, D]]
+
         Then G_{AA}^{-1} = D - C A^{-1} B, up to a multiplicative constant MU_0 / k^2.
 
         Parameters
