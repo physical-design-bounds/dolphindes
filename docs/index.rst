@@ -1,5 +1,3 @@
-.. Dolphindes documentation master file
-
 Welcome to Dolphindes's documentation!
 ======================================
 
