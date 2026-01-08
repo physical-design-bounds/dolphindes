@@ -33,8 +33,9 @@ dev = [
 ]
 docs = [
     "sphinx",
-    "sphinx-rtd-theme",
     "myst-parser",
+    "sphinx-automodapi",
+    "pydata-sphinx-theme",
 ]
 
 [tool.setuptools]

@@ -10,4 +10,8 @@ dependencies:
   - scikit-sparse
   - nlopt
   - pandoc
-  - pip
+  - pip:
+    - sphinx-automodapi
+    - pydata-sphinx-theme
+    - myst-parser
+    - .
