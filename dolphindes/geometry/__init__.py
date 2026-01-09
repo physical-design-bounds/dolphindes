@@ -11,5 +11,3 @@ __all__ = [
     "GeometryHyperparameters",
     "PolarFDFDGeometry",
 ]
-
-__all__ = ["CartesianFDFDGeometry", "GeometryHyperparameters"]
