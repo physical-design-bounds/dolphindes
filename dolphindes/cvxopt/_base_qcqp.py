@@ -658,7 +658,7 @@ class _SharedProjQCQP(ABC):
         method : str
             'newton' (alternating Newton / GD) or 'bfgs'.
         opt_params : OptimizationHyperparameters | None
-            Optimization hyperparameters (if None, QCQP-specific defaults are used).
+            Optimization hyperparameters (if None, default values are used).
         init_lags : ArrayLike | None
             Initial feasible lags; if None, a feasible point is searched.
 
@@ -678,7 +678,6 @@ class _SharedProjQCQP(ABC):
         is_convex = True
 
         if opt_params is None:
-            # QCQP-specific defaults (keep prior behavior)
             opt_params = OptimizationHyperparameters(
                 opttol=1e-2,
                 gradConverge=False,

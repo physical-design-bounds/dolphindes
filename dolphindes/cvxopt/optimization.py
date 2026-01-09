@@ -2,7 +2,7 @@
 
 __all__ = ["BFGS", "Alt_Newton_GD", "OptimizationHyperparameters"]
 
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
 from typing import Any, Callable, Tuple, cast
 
 import numpy as np
@@ -19,24 +19,24 @@ class OptimizationHyperparameters:
     Attributes
     ----------
     opttol : float
-        Optimization tolerance for convergence. Default: 1e-8.
+        Optimization tolerance for convergence. Default: 1e-2.
     gradConverge : bool
-        Whether to check for simple gradient convergence. Default: False.
+        Whether to check for gradient convergence. Default: False.
     min_inner_iter : int
-        Minimum number of inner iterations. Default: 5.
+        Minimum number of inner iterations for fixed penalty convergence. Default: 5.
     max_restart : float
-        Maximum number of outer (restart) iterations. Default: np.inf.
+        Maximum number of outer iterations that reduce penalties. Default: np.inf.
     penalty_ratio : float
-        Initial penalty ratio. Default: 1e-2.
+        Initial boundary penalty values, as a factor of dualvalue. Default: 1e-2.
     penalty_reduction : float
-        Factor by which penalty ratio is reduced. Default: 0.1.
+        Factor by which penalty ratio is reduced per outer iteration. Default: 0.1.
     break_iter_period : int
         Period of iterations for checking break conditions. Default: 50.
     verbose : int
         Verbosity level (0 = silent). Default: 0.
     """
 
-    opttol: float = 1e-8
+    opttol: float = 1e-2
     gradConverge: bool = False
     min_inner_iter: int = 5
     max_restart: float = np.inf
@@ -406,9 +406,7 @@ class BFGS(_Optimizer):
                 penalty_value = self.optfunc(
                     x0, get_grad=False, get_hess=False, penalty_vectors=[penalty_vector]
                 )[0]
-                epsS = np.sqrt(
-                    self.penalty_ratio * np.abs(opt_fx0 / penalty_value)
-                )
+                epsS = np.sqrt(self.penalty_ratio * np.abs(opt_fx0 / penalty_value))
                 self.penalty_vector_list.append(epsS * penalty_vector)
 
                 return opt_step_size, True
@@ -636,9 +634,7 @@ class Alt_Newton_GD(_Optimizer):
             penalty_value = self.optfunc(
                 x0, get_grad=False, get_hess=False, penalty_vectors=[penalty_vector]
             )[0]
-            epsS = np.sqrt(
-                self.penalty_ratio * np.abs(opt_fx0 / penalty_value)
-            )
+            epsS = np.sqrt(self.penalty_ratio * np.abs(opt_fx0 / penalty_value))
             self.penalty_vector_list.append(epsS * penalty_vector)
 
         return opt_step_size
