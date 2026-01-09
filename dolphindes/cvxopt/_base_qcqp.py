@@ -10,7 +10,7 @@ from numpy.typing import ArrayLike, NDArray
 from dolphindes.types import ComplexArray, FloatNDArray, SparseDense
 from dolphindes.util import Projectors, Sym
 
-from .optimization import BFGS, Alt_Newton_GD, _Optimizer
+from .optimization import BFGS, Alt_Newton_GD, OptimizationHyperparameters, _Optimizer
 
 if TYPE_CHECKING:
     from .gcd import GCDHyperparameters
@@ -647,7 +647,7 @@ class _SharedProjQCQP(ABC):
     def solve_current_dual_problem(
         self,
         method: str,
-        opt_params: Optional[dict[str, Any]] = None,
+        opt_params: Optional[OptimizationHyperparameters] = None,
         init_lags: Optional[ArrayLike] = None,
     ) -> Tuple[float, ArrayLike, ArrayLike, Optional[ArrayLike], ArrayLike]:
         """
@@ -657,8 +657,8 @@ class _SharedProjQCQP(ABC):
         ----------
         method : str
             'newton' (alternating Newton / GD) or 'bfgs'.
-        opt_params : dict | None
-            Override optimization parameters (see optimization.py defaults).
+        opt_params : OptimizationHyperparameters | None
+            Optimization hyperparameters (if None, QCQP-specific defaults are used).
         init_lags : ArrayLike | None
             Initial feasible lags; if None, a feasible point is searched.
 
@@ -677,23 +677,18 @@ class _SharedProjQCQP(ABC):
         """
         is_convex = True
 
-        OPT_PARAMS_DEFAULTS = {
-            "opttol": 1e-2,
-            "gradConverge": False,
-            "min_inner_iter": 5,
-            "max_restart": np.inf,
-            "penalty_ratio": 1e-2,
-            "penalty_reduction": 0.1,
-            "break_iter_period": 20,
-            "verbose": self.verbose - 1,
-            "penalty_vector_list": [],
-        }
         if opt_params is None:
-            opt_params = {}
-        opt_params = {
-            **OPT_PARAMS_DEFAULTS,
-            **opt_params,
-        }  # override defaults with user specifications
+            # QCQP-specific defaults (keep prior behavior)
+            opt_params = OptimizationHyperparameters(
+                opttol=1e-2,
+                gradConverge=False,
+                min_inner_iter=5,
+                max_restart=np.inf,
+                penalty_ratio=1e-2,
+                penalty_reduction=0.1,
+                break_iter_period=20,
+                verbose=int(self.verbose - 1),
+            )
 
         if init_lags is None:
             init_lags = self.find_feasible_lags()

@@ -1,13 +1,49 @@
 """Optimizers."""
 
-__all__ = ["BFGS", "Alt_Newton_GD"]
+__all__ = ["BFGS", "Alt_Newton_GD", "OptimizationHyperparameters"]
 
+from dataclasses import dataclass, asdict
 from typing import Any, Callable, Tuple, cast
 
 import numpy as np
 from numpy.typing import ArrayLike
 
 from dolphindes.types import FloatNDArray
+
+
+@dataclass(frozen=True)
+class OptimizationHyperparameters:
+    """
+    Hyperparameters for optimization algorithms.
+
+    Attributes
+    ----------
+    opttol : float
+        Optimization tolerance for convergence. Default: 1e-8.
+    gradConverge : bool
+        Whether to check for simple gradient convergence. Default: False.
+    min_inner_iter : int
+        Minimum number of inner iterations. Default: 5.
+    max_restart : float
+        Maximum number of outer (restart) iterations. Default: np.inf.
+    penalty_ratio : float
+        Initial penalty ratio. Default: 1e-2.
+    penalty_reduction : float
+        Factor by which penalty ratio is reduced. Default: 0.1.
+    break_iter_period : int
+        Period of iterations for checking break conditions. Default: 50.
+    verbose : int
+        Verbosity level (0 = silent). Default: 0.
+    """
+
+    opttol: float = 1e-8
+    gradConverge: bool = False
+    min_inner_iter: int = 5
+    max_restart: float = np.inf
+    penalty_ratio: float = 1e-2
+    penalty_reduction: float = 0.1
+    break_iter_period: int = 50
+    verbose: int = 0
 
 
 class _Optimizer:
@@ -28,9 +64,8 @@ class _Optimizer:
         Function that returns penalty vectors.
     is_convex : bool
         Boolean indicating if the optimization problem is convex.
-    opt_params : dict[str, Any]
-        Dictionary containing optimization parameters. These parameters
-        override the default parameters defined in OPT_PARAMS_DEFAULTS.
+    opt_params : OptimizationHyperparameters
+        Optimization parameters.
 
     Attributes
     ----------
@@ -41,8 +76,8 @@ class _Optimizer:
         Function to check if a solution is feasible.
     penalty_vector_func : Callable[[FloatNDArray], Tuple[FloatNDArray, Any]]
         Function to compute penalty vectors given a point x.
-    opt_params : dict[str, Any]
-        Dictionary of optimization parameters.
+    opt_params : OptimizationHyperparameters
+        Optimization parameters configuration.
     last_opt_x : FloatNDArray | None
         The last optimized parameter vector.
     last_opt_fx : float | None
@@ -55,41 +90,32 @@ class _Optimizer:
     the results of the most recent optimization.
     """
 
-    OPT_PARAMS_DEFAULTS = {
-        "opttol": 1e-8,
-        "gradConverge": False,
-        "min_inner_iter": 5,
-        "max_restart": np.inf,
-        "penalty_ratio": 1e-2,
-        "penalty_reduction": 0.1,
-        "break_iter_period": 50,
-        "verbose": 0,
-    }
-
     def __init__(
         self,
         optfunc: Callable[..., Tuple[float, FloatNDArray, FloatNDArray, Any]],
         feasible_func: Callable[[FloatNDArray], bool],
         penalty_vector_func: Callable[[FloatNDArray], Tuple[FloatNDArray, Any]],
         is_convex: bool,
-        opt_params: dict[str, Any],
+        opt_params: OptimizationHyperparameters,
     ) -> None:
         self.optfunc = optfunc
         self.feasible_func = feasible_func
         self.penalty_vector_func = penalty_vector_func
 
         self.is_convex = is_convex
-        self.opt_params = {**self.OPT_PARAMS_DEFAULTS, **opt_params}
+        self.opt_params = opt_params
         self.penalty_vector_list: list[FloatNDArray] = []
 
-        if self.opt_params["verbose"] > 0:
+        self.penalty_ratio = self.opt_params.penalty_ratio
+
+        if self.opt_params.verbose > 0:
             print("Optimizer initialized with parameters:")
-            for k, v in self.opt_params.items():
+            for k, v in asdict(self.opt_params).items():
                 print(f"{k}: {v}")
 
         self.opt_x: FloatNDArray | None = None  # type annotation for mypy
         self.opt_fx: float | None = None
-        self.verbose = self.opt_params["verbose"]
+        self.verbose = self.opt_params.verbose
         self.xgrad: FloatNDArray
         self.prev_fx: float
         self.prev_fx_outer: float
@@ -225,13 +251,13 @@ class BFGS(_Optimizer):
     def _break_condition(self, iter_num: int, iter_type: str) -> bool:
         if iter_type == "inner":
             # Directional stationarity residual convergence
-            if iter_num > self.opt_params["min_inner_iter"]:
+            if iter_num > self.opt_params.min_inner_iter:
                 function_value = cast(float, self.opt_fx)
-                opttol = self.opt_params["opttol"]
+                opttol = self.opt_params.opttol
                 opt_x = cast(FloatNDArray, self.opt_x)
                 fminus_xxgrad = function_value - np.dot(opt_x, self.xgrad)
                 remaining_descent = np.abs(opt_x) @ np.abs(self.xgrad)
-                gradConverge = self.opt_params["gradConverge"]
+                gradConverge = self.opt_params.gradConverge
 
                 if (
                     gradConverge
@@ -251,15 +277,15 @@ class BFGS(_Optimizer):
                     return True
 
             # Simple objective value convergence
-            if iter_num % self.opt_params["break_iter_period"] == 0:
+            if iter_num % self.opt_params.break_iter_period == 0:
                 if self.verbose > 0:
                     print(
                         f"iter_num: {iter_num}, prev_fx: {self.prev_fx}, "
-                        f"opt_fx: {self.opt_fx}, opttol: {self.opt_params['opttol']}"
+                        f"opt_fx: {self.opt_fx}, opttol: {self.opt_params.opttol}"
                     )
                 if np.abs(self.prev_fx - cast(float, self.opt_fx)) < np.abs(
                     cast(float, self.opt_fx)
-                ) * self.opt_params["opttol"] or np.isclose(
+                ) * self.opt_params.opttol or np.isclose(
                     cast(float, self.opt_fx), 0, atol=1e-14
                 ):
                     return True
@@ -269,17 +295,17 @@ class BFGS(_Optimizer):
             # Outer objective value convergence
             if np.abs(self.prev_fx_outer - cast(float, self.opt_fx)) < np.abs(
                 cast(float, self.opt_fx)
-            ) * self.opt_params["opttol"] or np.isclose(
+            ) * self.opt_params.opttol or np.isclose(
                 cast(float, self.opt_fx), 0, atol=1e-14
             ):
                 return True
 
             # If a max number of outer iterations was specified, check for that
-            if iter_num > self.opt_params["max_restart"]:
+            if iter_num > self.opt_params.max_restart:
                 if self.verbose >= 2:
                     print(
                         "Maximum number of outer iterations reached: "
-                        f"{self.opt_params['max_restart']}"
+                        f"{self.opt_params.max_restart}"
                     )
                 return True
 
@@ -381,7 +407,7 @@ class BFGS(_Optimizer):
                     x0, get_grad=False, get_hess=False, penalty_vectors=[penalty_vector]
                 )[0]
                 epsS = np.sqrt(
-                    self.opt_params["penalty_ratio"] * np.abs(opt_fx0 / penalty_value)
+                    self.penalty_ratio * np.abs(opt_fx0 / penalty_value)
                 )
                 self.penalty_vector_list.append(epsS * penalty_vector)
 
@@ -419,6 +445,8 @@ class BFGS(_Optimizer):
         self.prev_fx = np.inf
         self.prev_fx_outer = np.inf
 
+        self.penalty_ratio = self.opt_params.penalty_ratio
+
         outer_iter_count = 0
 
         if self.verbose > 0:
@@ -439,7 +467,7 @@ class BFGS(_Optimizer):
                 print(
                     (
                         f"Outer iteration {outer_iter_count}, penalty_ratio = "
-                        f"{self.opt_params['penalty_ratio']}, opt_fx = {self.opt_fx}"
+                        f"{self.penalty_ratio}, opt_fx = {self.opt_fx}"
                     )
                 )
 
@@ -489,7 +517,7 @@ class BFGS(_Optimizer):
             self.prev_fx_outer = self.opt_fx
 
             outer_iter_count += 1
-            self.opt_params["penalty_ratio"] *= self.opt_params["penalty_reduction"]
+            self.penalty_ratio *= self.opt_params.penalty_reduction
 
         return self.opt_x, self.opt_fx, self.xgrad, None
 
@@ -511,13 +539,13 @@ class Alt_Newton_GD(_Optimizer):
     def _break_condition(self, iter_num: int, iter_type: str) -> bool:
         if iter_type == "inner":
             # Directional stationarity residual convergence
-            if iter_num > self.opt_params["min_inner_iter"]:
+            if iter_num > self.opt_params.min_inner_iter:
                 function_value = cast(float, self.opt_fx)
-                opttol = self.opt_params["opttol"]
+                opttol = self.opt_params.opttol
                 opt_x = cast(FloatNDArray, self.opt_x)
                 fminus_xxgrad = function_value - np.dot(opt_x, self.xgrad)
                 remaining_descent = np.abs(opt_x) @ np.abs(self.xgrad)
-                gradConverge = self.opt_params["gradConverge"]
+                gradConverge = self.opt_params.gradConverge
 
                 if self.verbose >= 3:
                     print(
@@ -543,15 +571,15 @@ class Alt_Newton_GD(_Optimizer):
                     return True
 
             # Simple objective value convergence
-            if iter_num % self.opt_params["break_iter_period"] == 0:
+            if iter_num % self.opt_params.break_iter_period == 0:
                 if self.verbose > 1:
                     print(
                         f"iter_num: {iter_num}, prev_fx: {self.prev_fx}, "
-                        f"opt_fx: {self.opt_fx}, opttol: {self.opt_params['opttol']}"
+                        f"opt_fx: {self.opt_fx}, opttol: {self.opt_params.opttol}"
                     )
                 if np.abs(self.prev_fx - cast(float, self.opt_fx)) < np.abs(
                     cast(float, self.opt_fx)
-                ) * self.opt_params["opttol"] or np.isclose(
+                ) * self.opt_params.opttol or np.isclose(
                     cast(float, self.opt_fx), 0, atol=1e-14
                 ):
                     return True
@@ -561,18 +589,18 @@ class Alt_Newton_GD(_Optimizer):
             # Outer objective value convergence
             if np.abs(self.prev_fx_outer - cast(float, self.opt_fx)) < np.abs(
                 cast(float, self.opt_fx)
-            ) * self.opt_params["opttol"] or np.isclose(
+            ) * self.opt_params.opttol or np.isclose(
                 cast(float, self.opt_fx), 0, atol=1e-14
             ):
                 return True
             self.prev_fx_outer = cast(float, self.opt_fx)
 
             # If a max number of outer iterations was specified, check for that
-            if iter_num > self.opt_params["max_restart"]:
+            if iter_num > self.opt_params.max_restart:
                 if self.verbose >= 1:
                     print(
                         "Maximum number of outer iterations reached: "
-                        f"{self.opt_params['max_restart']}"
+                        f"{self.opt_params.max_restart}"
                     )
                 return True
 
@@ -609,7 +637,7 @@ class Alt_Newton_GD(_Optimizer):
                 x0, get_grad=False, get_hess=False, penalty_vectors=[penalty_vector]
             )[0]
             epsS = np.sqrt(
-                self.opt_params["penalty_ratio"] * np.abs(opt_fx0 / penalty_value)
+                self.penalty_ratio * np.abs(opt_fx0 / penalty_value)
             )
             self.penalty_vector_list.append(epsS * penalty_vector)
 
@@ -644,6 +672,8 @@ class Alt_Newton_GD(_Optimizer):
         self.prev_fx = np.inf
         self.prev_fx_outer = np.inf
 
+        self.penalty_ratio = self.opt_params.penalty_ratio
+
         outer_iter_count = 1
 
         if self.verbose > 0:
@@ -658,7 +688,7 @@ class Alt_Newton_GD(_Optimizer):
             if self.verbose > 0:
                 print(
                     f"Outer iteration {outer_iter_count}, penalty_ratio = "
-                    f"{self.opt_params['penalty_ratio']}, opt_fx = {self.opt_fx}"
+                    f"{self.penalty_ratio}, opt_fx = {self.opt_fx}"
                 )
 
             while True:
@@ -720,7 +750,7 @@ class Alt_Newton_GD(_Optimizer):
             # outer iteration check convergence, reduce penalties, and update iter count
             if self._break_condition(outer_iter_count, "outer"):
                 break
-            self.opt_params["penalty_ratio"] *= self.opt_params["penalty_reduction"]
+            self.penalty_ratio *= self.opt_params.penalty_reduction
             outer_iter_count += 1
 
         return self.opt_x, self.opt_fx, self.xgrad, self.xhess

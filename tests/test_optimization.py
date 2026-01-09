@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Tuple, Union
 import numpy as np
 import pytest
 
-from dolphindes.cvxopt import BFGS, Alt_Newton_GD
+from dolphindes.cvxopt import BFGS, Alt_Newton_GD, OptimizationHyperparameters
 from dolphindes.types import ComplexArray, FloatNDArray
 
 np.random.seed(0)
@@ -48,15 +48,17 @@ def _optimization_setup() -> Dict[str, Any]:
     def feasible_func(x: Union[ComplexArray, FloatNDArray, List[Any]]) -> bool:
         return True
 
-    def penalty_func(x: Any) -> None:
-        pass
+    def penalty_func(x: FloatNDArray) -> Tuple[FloatNDArray, Any]:
+        # This test never hits the feasibility wall, but the optimizer expects
+        # (penalty_vector, aux) if it ever needs it.
+        return np.zeros_like(x, dtype=np.float64), None
 
-    opt_config = {
-        "opttol": opttol,
-        "verbose": 4,
-        "break_iter_period": 10,
-        "gradConverge": True,
-    }
+    opt_config = OptimizationHyperparameters(
+        opttol=opttol,
+        verbose=4,
+        break_iter_period=10,
+        gradConverge=True,
+    )
 
     Ainv = np.linalg.inv(A)
     analytical_solution = 1 / 2 * Ainv @ b

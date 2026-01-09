@@ -18,7 +18,11 @@ import numpy as np
 import scipy.sparse as sp
 from numpy.typing import NDArray
 
-from dolphindes.cvxopt import DenseSharedProjQCQP, SparseSharedProjQCQP
+from dolphindes.cvxopt import (
+    DenseSharedProjQCQP,
+    OptimizationHyperparameters,
+    SparseSharedProjQCQP,
+)
 from dolphindes.geometry import GeometryHyperparameters
 from dolphindes.types import (
     BoolGrid,
@@ -394,7 +398,7 @@ class Photonics_FDFD(ABC):
         self,
         method: str = "bfgs",
         init_lags: Optional[FloatNDArray] = None,
-        opt_params: Optional[dict[str, Any]] = None,
+        opt_params: Optional[OptimizationHyperparameters] = None,
     ) -> Tuple[float, FloatNDArray, FloatNDArray, Optional[FloatNDArray], ComplexArray]:
         """
         Solve the QCQP dual and return solver results.
@@ -405,8 +409,8 @@ class Photonics_FDFD(ABC):
             Optimization method. Default: 'bfgs'
         init_lags : ndarray of float, optional
             Initial Lagrange multipliers.
-        opt_params : dict, optional
-            Optimization parameters.
+        opt_params : OptimizationHyperparameters, optional
+            Optimization hyperparameters.
 
         Returns
         -------
@@ -454,7 +458,7 @@ class Photonics_FDFD(ABC):
         self,
         method: str = "bfgs",
         init_lags: Optional[FloatNDArray] = None,
-        opt_params: Optional[dict[str, Any]] = None,
+        opt_params: Optional[OptimizationHyperparameters] = None,
     ) -> Tuple[float, FloatNDArray, FloatNDArray, Optional[FloatNDArray], ComplexArray]:
         """
         Delegate to bound_QCQP so callers can use a uniform method name.
@@ -467,8 +471,8 @@ class Photonics_FDFD(ABC):
             Optimization method. Default: 'bfgs'
         init_lags : ndarray of float, optional
             Initial Lagrange multipliers.
-        opt_params : dict, optional
-            Optimization parameters.
+        opt_params : OptimizationHyperparameters, optional
+            Optimization hyperparameters.
 
         Returns
         -------
