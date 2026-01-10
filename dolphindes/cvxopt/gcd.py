@@ -12,33 +12,41 @@ For usage examples see:
 Mathematical details: Appendix B of https://arxiv.org/abs/2504.10469
 """
 
-import numpy as np
 from dataclasses import dataclass
+
+import numpy as np
 import scipy.linalg as la
 
 from dolphindes.cvxopt._base_qcqp import _SharedProjQCQP
+from dolphindes.cvxopt.optimization import OptimizationHyperparameters
 from dolphindes.util import CRdot, Sym
 
 
 @dataclass(frozen=True)
-class GCDHyperparameters():
+class GCDHyperparameters:
     """Hyperparameters for GCD algorithm.
 
-    Parameters
+    Attributes
     ----------
-    method : str
-        Method to use for GCD. Options are "fast" (default)
-    delta : float
-        Tolerance for checking strong duality. Default is 1e-3.
-    loss_peak : float
-        Peak loss (imaginary part of chi) at t = 0.5. Default is 0.1.
-    max_iter : int | float
-        Maximum number of GCD iterations to perform. Default is np.inf.
+    max_proj_cstrt_num : int
+        Maximum number of projector constraints to keep during GCD.
+    orthonormalize : bool
+        Whether to keep projector constraints orthonormalized.
+    opt_params : OptimizationHyperparameters | None
+        Optimization hyperparameters used for the internal dual solve at each GCD
+        iteration. If None, GCD uses defaults suitable for frequent re-solves
+        (notably `max_restart=1`).
+    max_gcd_iter_num : int
+        Maximum number of GCD iterations.
+    gcd_iter_period : int
+        Period for checking GCD convergence.
+    gcd_tol : float
+        Relative tolerance for GCD convergence.
     """
 
     max_proj_cstrt_num: int = 10
     orthonormalize: bool = True
-    opt_params: dict | None = None
+    opt_params: OptimizationHyperparameters | None = None
     max_gcd_iter_num: int = 50
     gcd_iter_period: int = 5
     gcd_tol: float = 1e-2
@@ -178,12 +186,6 @@ def add_constraints(
 def run_gcd(
     QCQP: _SharedProjQCQP,
     gcd_params: GCDHyperparameters = GCDHyperparameters(),
-    # max_proj_cstrt_num: int = 10,
-    # orthonormalize: bool = True,
-    # opt_params: dict | None = None,
-    # max_gcd_iter_num: int = 50,
-    # gcd_iter_period: int = 5,
-    # gcd_tol: float = 1e-2,
 ) -> None:
     """
     Perform generalized constraint descent to gradually refine dual bound on QCQP.
@@ -199,7 +201,7 @@ def run_gcd(
     the earlier constraints to keep the total number of constraints fixed. Setting
     max_proj_cstrt_num large enough will eventually result in evaluating the dual bound
     with all possible constraints, which gives the tightest bound but may be extremely
-    expensive. The goal of GCD is to approximate this tightest bound with greatly 
+    expensive. The goal of GCD is to approximate this tightest bound with greatly
     reduced computational cost.
 
     Parameters
@@ -210,8 +212,9 @@ def run_gcd(
         The maximum projection constraint number for QCQP. The default is 10.
     orthonormalize : bool, optional
         Whether or not to orthonormalize the constraint projectors. The default is True.
-    opt_params : dict, optional
-        The opt_params for the internal _Optimizer run at every GCD iteration.
+    opt_params : OptimizationHyperparameters, optional
+        Optimization hyperparameters for the internal dual solve at every GCD
+        iteration.
     max_gcd_iter_num : int, optional
         Maximum number of GCD iterations, by default 50.
     gcd_iter_period : int, optional
@@ -223,17 +226,27 @@ def run_gcd(
     -----
     TODO: formalize optimization and convergence parameters.
     """
-    # since GCD is constantly changing the constraints, no need for many fake source 
-    # iterations
-    OPT_PARAMS_DEFAULTS = {"max_restart": 1}
+    # Since GCD constantly changes constraints, there is typically little value in
+    # running multiple outer penalty-reduction restarts for each intermediate solve.
+    # Default to a single outer iteration (max_restart=1).
     if gcd_params.opt_params is None:
-        opt_params = {}
-    opt_params = {**OPT_PARAMS_DEFAULTS, **opt_params}
+        opt_params = OptimizationHyperparameters(
+            opttol=1e-2,
+            gradConverge=False,
+            min_inner_iter=5,
+            max_restart=1,
+            penalty_ratio=1e-2,
+            penalty_reduction=0.1,
+            break_iter_period=20,
+            verbose=int(QCQP.verbose - 1),
+        )
+    else:
+        opt_params = gcd_params.opt_params
 
     # get to feasible point
     # TODO: revamp find_feasible_lags
     QCQP.current_lags = QCQP.find_feasible_lags()
-    
+
     orthonormalize = gcd_params.orthonormalize
     max_proj_cstrt_num = gcd_params.max_proj_cstrt_num
     max_gcd_iter_num = gcd_params.max_gcd_iter_num
@@ -304,7 +317,7 @@ def run_gcd(
         ).conj()[Pstruct_cols]
 
         minAeig_Pdiag /= np.sqrt(np.real(minAeig_Pdiag.conj() * minAeig_Pdiag))
-        # minAeig_Pdiag * np.sqrt(np.real(maxViol_Pdiag.conj() * maxViol_Pdiag)) 
+        # minAeig_Pdiag * np.sqrt(np.real(maxViol_Pdiag.conj() * maxViol_Pdiag))
         # use the same relative weights for minAeig_Pdiag as maxViol_Pdiag
         # informally checked that minAeigw increases when increasing multiplier of
         # minAeig_Pdiag
