@@ -39,9 +39,8 @@ docs = [
     "nbsphinx",
 ]
 
-[tool.setuptools]
-packages = ["dolphindes"]
-
+[tool.setuptools.packages.find]
+include = ["dolphindes"]
 
 # -----------------------------
 # Linting & Docstrings: Ruff
