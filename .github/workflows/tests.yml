@@ -29,9 +29,10 @@ jobs:
         shell: bash -l {0}
         run: pytest -m "not slow" --cov=dolphindes --cov-report=xml
 
-      - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v4
+      - name: Upload coverage reports to Codecov
+        uses: codecov/codecov-action@v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
+          slug: physical-design-bounds/dolphindes
           files: ./coverage.xml
           fail_ci_if_error: true
