@@ -9,7 +9,7 @@ implementations optimized for different matrix structures.
 __all__ = ["SparseSharedProjQCQP", "DenseSharedProjQCQP"]
 
 import copy
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import scipy.linalg as la
@@ -154,12 +154,16 @@ class SparseSharedProjQCQP(_SharedProjQCQP):
         """
         random_lags = np.random.rand(self.n_proj_constr + self.n_gen_constr)
         A = self._get_total_A(random_lags)
+        assert sp.issparse(A)
+        A = sp.csc_array(A)
+
         if self.verbose > 1:
             print(
                 f"analyzing A of format and shape {type(A)}, {A.shape} "
-                f"and # of nonzero elements '{A.count_nonzero()}"
+                f"and # of nonzero elements '{A.nnz}"
             )
         self.Acho = sksparse.cholmod.analyze(A)
+        return self.Acho
 
     def _update_Acho(self, A: sp.csc_array) -> None:
         """
@@ -170,6 +174,7 @@ class SparseSharedProjQCQP(_SharedProjQCQP):
         A : sp.csc_array
             Current Hermitian (PSD / PD) system matrix.
         """
+        assert self.Acho is not None
         self.Acho.cholesky_inplace(A)
 
     def _Acho_solve(self, b: ComplexArray) -> ComplexArray:
@@ -186,7 +191,8 @@ class SparseSharedProjQCQP(_SharedProjQCQP):
         ComplexArray
             Solution x = A^{-1} b.
         """
-        return self.Acho.solve_A(b)
+        assert self.Acho is not None
+        return cast(ComplexArray, self.Acho.solve_A(b))
 
     def is_dual_feasible(self, lags: FloatNDArray) -> bool:
         """
@@ -202,7 +208,10 @@ class SparseSharedProjQCQP(_SharedProjQCQP):
         bool
             True if factorization succeeds (A is PSD), False otherwise.
         """
+        assert self.Acho is not None
         A = self._get_total_A(lags)
+        assert sp.issparse(A)
+        A = sp.csc_array(A)
         try:
             tmp = self.Acho.cholesky(A)
             tmp = (
@@ -261,8 +270,8 @@ class DenseSharedProjQCQP(_SharedProjQCQP):
         verbose: int = 0,
     ):
         if A2 is None:
-            A2 = sp.eye_array(len(s0), format="csc")
-
+            n = int(np.asarray(s0).shape[0])
+            A2 = sp.eye_array(n, format="csc")
         super().__init__(
             A0,
             s0,
@@ -310,7 +319,7 @@ class DenseSharedProjQCQP(_SharedProjQCQP):
         ComplexArray
             Solution x = A^{-1} b.
         """
-        return la.cho_solve(self.Acho, b)
+        return cast(ComplexArray, la.cho_solve(self.Acho, b))
 
     def is_dual_feasible(self, lags: FloatNDArray) -> bool:
         """

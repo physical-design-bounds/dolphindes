@@ -804,8 +804,7 @@ class _SharedProjQCQP(ABC):
                 "Refinement only implemented for diagonal projectors."
             )
 
-        # Treat current_lags as non-Optional for type checker
-        curr_lags: NDArray[np.float64] = cast(NDArray[np.float64], self.current_lags)
+        curr_lags = self.current_lags
 
         # Preserve current dual for verification
         old_dual = self.get_dual(curr_lags, get_grad=False)[0]
@@ -866,10 +865,8 @@ class _SharedProjQCQP(ABC):
 
         self.compute_precomputed_values()
 
-        # Verify the dual value remains the same (A and S unchanged)
-        new_dual = self.get_dual(cast(FloatNDArray, self.current_lags), get_grad=False)[
-            0
-        ]
+        assert self.current_lags is not None
+        new_dual = self.get_dual(self.current_lags, get_grad=False)[0]
         if self.verbose >= 1:
             print(f"previous dual: {old_dual}, new dual: {new_dual} (should match)")
         assert np.isclose(new_dual, old_dual, rtol=1e-2, atol=1e-8), (
@@ -880,7 +877,7 @@ class _SharedProjQCQP(ABC):
         self.current_dual = new_dual
         # current_grad/hess/xstar are now stale; recompute lazily when next requested
 
-        return self.Proj, cast(NDArray[np.float64], self.current_lags)
+        return self.Proj, self.current_lags
 
     def iterative_splitting_step(
         self, method: str = "bfgs", max_proj_cstrt_num: int | float = np.inf
@@ -933,13 +930,4 @@ class _SharedProjQCQP(ABC):
             result = self.solve_current_dual_problem(
                 method, init_lags=self.current_lags
             )
-            yield cast(
-                Tuple[
-                    float,
-                    FloatNDArray,
-                    FloatNDArray,
-                    Optional[FloatNDArray],
-                    ComplexArray,
-                ],
-                result,
-            )
+            yield result  # already matches the declared Iterator element type

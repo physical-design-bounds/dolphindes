@@ -20,10 +20,10 @@ def data_dir():
     """Return the path to the reference data directory."""
     return (
         Path(os.path.dirname(__file__)) / "reference_arrays" / "qcqp_example" / "sparse"
-    )  # noqa: E501
+    )
 
 
-@pytest.fixture(params=["global", "local"])
+@pytest.fixture(params=["global", pytest.param("local", marks=pytest.mark.slow)])
 def sparse_qcqp_data(data_dir, request):
     """Fixture to load data and initialize SparseSharedProjQCQP."""
     added_str = request.param
@@ -86,7 +86,7 @@ def data_dir_dense():
     )
 
 
-@pytest.fixture(params=["global", "local"])
+@pytest.fixture(params=["global", pytest.param("local", marks=pytest.mark.slow)])
 def dense_qcqp_data(data_dir_dense, request):
     """Fixture to load data and initialize DenseSharedProjQCQP."""
     added_str = request.param
@@ -269,6 +269,16 @@ class TestQCQP:
             "Hessian does not match optimal Hessian."
         )
 
+    @pytest.mark.slow
+    def test_sparse_qcqp_iterative_splitting(self, sparse_qcqp_data):
+        """Test iterative splitting step and merging (sparse)."""
+        sparse_ldos_qcqp = sparse_qcqp_data["qcqp"]
+        added_str = sparse_qcqp_data["added_str"]
+        init_lags = sparse_ldos_qcqp.find_feasible_lags()
+
+        # Must solve first to set up state for splitting
+        sparse_ldos_qcqp.solve_current_dual_problem("bfgs", init_lags=init_lags)
+
         print("Testing iterative splitting step (sparse)")
         results = []
         result_counter = 0
@@ -288,6 +298,7 @@ class TestQCQP:
 
         print("Testing the merging of constraints")
         from dolphindes.cvxopt import gcd
+
         sparse_ldos_qcqp.compute_precomputed_values()
         dual_opt, dual_grad, dual_hess, _ = sparse_ldos_qcqp.get_dual(
             sparse_ldos_qcqp.current_lags, get_grad=True, get_hess=True
@@ -301,15 +312,15 @@ class TestQCQP:
         merged_dual, merged_grad, merged_hess, _ = sparse_ldos_qcqp.get_dual(
             sparse_ldos_qcqp.current_lags, get_grad=True, get_hess=True
         )
-        assert np.allclose(
-            dual_opt, merged_dual, atol=1e-2
-        ), "dual value changed after constraint merge."
-        assert np.allclose(
-            dual_grad[-5:], merged_grad[-5:], atol=1e-2
-        ), "dual grad changed after constraint merge."
-        assert np.allclose(
-            dual_hess[-5:, -5:], merged_hess[-5:, -5:], rtol=1e-2
-        ), "dual Hess changed after constraint merge."
+        assert np.allclose(dual_opt, merged_dual, atol=1e-2), (
+            "dual value changed after constraint merge."
+        )
+        assert np.allclose(dual_grad[-5:], merged_grad[-5:], atol=1e-2), (
+            "dual grad changed after constraint merge."
+        )
+        assert np.allclose(dual_hess[-5:, -5:], merged_hess[-5:, -5:], rtol=1e-2), (
+            "dual Hess changed after constraint merge."
+        )
 
     @pytest.mark.dependency(name="dense_test")
     def test_dense_qcqp(self, dense_qcqp_data, dual_results):
@@ -413,6 +424,15 @@ class TestQCQP:
             dual_lambda, get_grad=True, get_hess=True
         )
 
+    @pytest.mark.slow
+    def test_dense_qcqp_iterative_splitting(self, dense_qcqp_data):
+        """Test iterative splitting step (dense)."""
+        dense_ldos_qcqp = dense_qcqp_data["qcqp"]
+        init_lags = dense_ldos_qcqp.find_feasible_lags()
+
+        # Must solve first to set up state for splitting
+        dense_ldos_qcqp.solve_current_dual_problem("bfgs", init_lags=init_lags)
+
         print("Testing iterative splitting step (dense)")
         results = []
         result_counter = 0
@@ -494,8 +514,18 @@ def test_dense_qcqp_with_general_constraint(dense_qcqp_data):
         sp.diags_array(Pdiags[:, j], format="csc") for j in range(Pdiags.shape[1])
     ]
     qcqp_gc = DenseSharedProjQCQP(
-        A0, s0, c, A1, s1, Projlist, None, A2=None, 
-        B_j=B_j, s_2j=s_2j, c_2j=c_2j, verbose=0
+        A0,
+        s0,
+        c,
+        A1,
+        s1,
+        Projlist,
+        None,
+        A2=None,
+        B_j=B_j,
+        s_2j=s_2j,
+        c_2j=c_2j,
+        verbose=0,
     )
     init_lags = qcqp_gc.find_feasible_lags()
     dual, lags, grad, hess, xstar = qcqp_gc.solve_current_dual_problem(
@@ -525,8 +555,18 @@ def test_dense_qcqp_only_general_constraint():
     Pstruct = sp.eye_array(n_dim, format="csc")
 
     qcqp = DenseSharedProjQCQP(
-        A0, s0, c0, A1, s1, Projlist, Pstruct, A2=None, 
-        B_j=B_j, s_2j=s_2j, c_2j=c_2j, verbose=0
+        A0,
+        s0,
+        c0,
+        A1,
+        s1,
+        Projlist,
+        Pstruct,
+        A2=None,
+        B_j=B_j,
+        s_2j=s_2j,
+        c_2j=c_2j,
+        verbose=0,
     )
 
     # Provide manual initial lag (one general constraint only)
@@ -564,7 +604,7 @@ def test_sparse_qcqp_with_nondiagonal_projectors():
     Projlist = [sp.csc_array(P1), sp.csc_array(P2)]
 
     # Build Pstruct as union of projector sparsity patterns
-    Pstruct = (Projlist[0] != 0)
+    Pstruct = Projlist[0] != 0
     for P in Projlist[1:]:
         Pstruct = Pstruct.maximum(P != 0)
     Pstruct = sp.csc_array(Pstruct)
@@ -606,7 +646,7 @@ def test_dense_qcqp_with_nondiagonal_projectors():
     Projlist = [sp.csc_array(P1), sp.csc_array(P2)]
 
     # Build Pstruct as union of projector sparsity patterns
-    Pstruct = (Projlist[0] != 0)
+    Pstruct = Projlist[0] != 0
     for P in Projlist[1:]:
         Pstruct = Pstruct.maximum(P != 0)
     Pstruct = sp.csc_array(Pstruct)
@@ -618,8 +658,9 @@ def test_dense_qcqp_with_nondiagonal_projectors():
     s1 = rng.standard_normal(n) + 1j * rng.standard_normal(n)
     c0 = 0.0
 
-    qcqp = DenseSharedProjQCQP(A0, s0, c0, A1, s1, Projlist, 
-                               Pstruct, A2=None, verbose=0)
+    qcqp = DenseSharedProjQCQP(
+        A0, s0, c0, A1, s1, Projlist, Pstruct, A2=None, verbose=0
+    )
 
     lags0 = qcqp.find_feasible_lags()
     dual, grad, _, _ = qcqp.get_dual(lags0, get_grad=True)

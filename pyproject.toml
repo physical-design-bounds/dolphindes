@@ -47,13 +47,17 @@ include = ["dolphindes"]
 # -----------------------------
 [tool.ruff]
 line-length = 88
-extend-exclude = ["*.ipynb"]
+extend-exclude = ["*.ipynb", "build", "dist"]
 
 [tool.ruff.lint]
 # Enable general linting + docstring checks
 select = ["E", "F", "I", "D"]
 # Enforce NumPy-style docstrings
 pydocstyle.convention = "numpy"
+
+[tool.ruff.lint.per-file-ignores]
+# Tests aren't required to be fully docstring-clean; also ignore long explanatory lines.
+"tests/**/*.py" = ["D", "E501"]
 
 # -----------------------------
 # Type checking: mypy
@@ -68,6 +72,7 @@ check_untyped_defs = true
 warn_unused_ignores = true
 warn_redundant_casts = true
 warn_unused_configs = true
+exclude = ["build", "docs"]
 
 # Ignore all mypy errors inside the tests package so tests don't need annotations.
 [[tool.mypy.overrides]]
@@ -76,3 +81,9 @@ ignore_errors = true
 
 [tool.setuptools.package-data]
 "dolphindes" = ["py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "slow: long-running numerical tests",
+]
