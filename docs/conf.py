@@ -1,7 +1,7 @@
-# Configuration file for the Sphinx documentation builder.
-#
-# For the full list of built-in configuration values, see the documentation:
-# https://www.sphinx-doc.org/en/master/usage/configuration.html
+"""Sphinx configuration for the Dolphindes documentation."""
+
+import os
+import sys
 
 # -- Project information -----------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#project-information
@@ -43,12 +43,7 @@ html_theme_options = {
     "navigation_depth": 4,
 }
 
-import os
-import sys
-
 # -- Path setup --------------------------------------------------------------
-# If extensions (or modules to document with autodoc) are in another directory,
-# add these directories to sys.path here.
 sys.path.insert(0, os.path.abspath(".."))
 
 project = "dolphindes"
