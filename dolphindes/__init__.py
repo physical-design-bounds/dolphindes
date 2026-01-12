@@ -22,6 +22,8 @@ util
     Utilities
 """
 
+from . import cvxopt, geometry, maxwell, photonics, util
+
 __version__ = "0.1.0"
 
-__all__ = ["photonics", "cvxopt", "maxwell", "util", "__version__"]
+__all__ = ["photonics", "cvxopt", "geometry", "maxwell", "util", "__version__"]
