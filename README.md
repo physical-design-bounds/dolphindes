@@ -1,8 +1,8 @@
 # Dolphindes 🐬
 
-[![PR Checks](https://github.com/physical-design-bounds/dolphindes/actions/workflows/pr_checks.yml/badge.svg)](https://github.com/physical-design-bounds/dolphindes/actions/workflows/pr_checks.yml)
+[![CI: Quality](https://github.com/physical-design-bounds/dolphindes/actions/workflows/quality.yml/badge.svg)](https://github.com/physical-design-bounds/dolphindes/actions/workflows/quality.yml)
+[![CI: Tests](https://github.com/physical-design-bounds/dolphindes/actions/workflows/tests.yml/badge.svg)](https://github.com/physical-design-bounds/dolphindes/actions/workflows/tests.yml)
 [![Daily Full Tests](https://github.com/physical-design-bounds/dolphindes/actions/workflows/daily_checks.yml/badge.svg)](https://github.com/physical-design-bounds/dolphindes/actions/workflows/daily_checks.yml)
-
 
 Dolphindes (very loosely, Dual Optimization Limits for PHotonic/PHysical INverse DESign) is a Python package for calculating limits on the performance of photonic devices using dual optimization methods. It can calculate structure-agnostic performance bounds for a wide range of photonic problems. The package works by relaxing the photonic inverse design problem into a field optimization problem, which can then be further relaxed into a convex problem using Lagrange duality. 
 

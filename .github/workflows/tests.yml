@@ -1,0 +1,30 @@
+name: CI: Tests
+
+on:
+  pull_request:
+    branches: [ "main" ]
+  push:
+    branches: [ "main" ]
+
+jobs:
+  tests-fast:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Mamba
+        uses: conda-incubator/setup-miniconda@v3
+        with:
+          activate-environment: dolphindes
+          environment-file: dolphindes.yml
+          python-version: "3.10"
+          auto-activate-base: false
+          use-mamba: true
+
+      - name: Install Dev Dependencies
+        shell: bash -l {0}
+        run: pip install .[dev]
+
+      - name: Run Pytest (Fast only)
+        shell: bash -l {0}
+        run: pytest -m "not slow"
