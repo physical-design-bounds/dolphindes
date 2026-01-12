@@ -28,12 +28,10 @@ jobs:
 
       - name: Run Ruff (Linting)
         shell: bash -l {0}
-        continue-on-error: true
         run: ruff check .
 
       - name: Run Mypy (Type Checking)
         shell: bash -l {0}
-        continue-on-error: true
         run: mypy .
 
   tests-fast:
