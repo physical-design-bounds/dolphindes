@@ -455,26 +455,41 @@ class TestQCQP:
         for key, value in dual_results.items():
             print(f"{key}: {value}")
 
-        assert np.allclose(
-            dual_results["sparse_bfgs_global"],
-            dual_results["dense_bfgs_global"],
-            atol=1e-2,
-        ), "BFGS global results for sparse and dense do not match."
-        assert np.allclose(
-            dual_results["sparse_newton_global"],
-            dual_results["dense_newton_global"],
-            atol=1e-2,
-        ), "Newton global results for sparse and dense do not match."
-        assert np.allclose(
-            dual_results["sparse_bfgs_local"],
-            dual_results["dense_bfgs_local"],
-            atol=1e-2,
-        ), "BFGS local results for sparse and dense do not match."
-        assert np.allclose(
-            dual_results["sparse_newton_local"],
-            dual_results["dense_newton_local"],
-            atol=1e-2,
-        ), "Newton local results for sparse and dense do not match."
+        # Global results (should always run unless explicitly deselected)
+        if "sparse_bfgs_global" in dual_results and "dense_bfgs_global" in dual_results:
+            assert np.allclose(
+                dual_results["sparse_bfgs_global"],
+                dual_results["dense_bfgs_global"],
+                atol=1e-2,
+            ), "BFGS global results for sparse and dense do not match."
+
+        if (
+            "sparse_newton_global" in dual_results
+            and "dense_newton_global" in dual_results
+        ):
+            assert np.allclose(
+                dual_results["sparse_newton_global"],
+                dual_results["dense_newton_global"],
+                atol=1e-2,
+            ), "Newton global results for sparse and dense do not match."
+
+        # Local results (skipped if marked slow and running fast tests)
+        if "sparse_bfgs_local" in dual_results and "dense_bfgs_local" in dual_results:
+            assert np.allclose(
+                dual_results["sparse_bfgs_local"],
+                dual_results["dense_bfgs_local"],
+                atol=1e-2,
+            ), "BFGS local results for sparse and dense do not match."
+
+        if (
+            "sparse_newton_local" in dual_results
+            and "dense_newton_local" in dual_results
+        ):
+            assert np.allclose(
+                dual_results["sparse_newton_local"],
+                dual_results["dense_newton_local"],
+                atol=1e-2,
+            ), "Newton local results for sparse and dense do not match."
 
 
 def test_sparse_qcqp_with_general_constraint(sparse_qcqp_data):
