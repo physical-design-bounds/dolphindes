@@ -1,0 +1,34 @@
+name: "CI: Quality"
+
+on:
+  pull_request:
+    branches: [ "main" ]
+  push:
+    branches: [ "main" ]
+
+jobs:
+  lint-and-type:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Mamba
+        uses: conda-incubator/setup-miniconda@v3
+        with:
+          activate-environment: dolphindes
+          environment-file: dolphindes.yml
+          python-version: "3.10"
+          auto-activate-base: false
+          use-mamba: true 
+
+      - name: Install Dev Dependencies
+        shell: bash -l {0}
+        run: pip install .[dev]
+
+      - name: Run Ruff (Linting)
+        shell: bash -l {0}
+        run: ruff check .
+
+      - name: Run Mypy (Type Checking)
+        shell: bash -l {0}
+        run: mypy .

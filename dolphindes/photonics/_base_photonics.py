@@ -12,7 +12,7 @@ __all__ = [
 import copy
 import warnings
 from abc import ABC, abstractmethod
-from typing import Any, Literal, Optional, Tuple, Union
+from typing import Any, Literal, Optional, Tuple, Union, cast
 
 import numpy as np
 import scipy.sparse as sp
@@ -70,7 +70,8 @@ class Photonics_FDFD(ABC):
         The vector s0 in the QCQP field design objective.
     c0 : float
         The constant c0 in the QCQP field design objective.
-    QCQP : :class:`dolphindes.cvxopt.qcqp.SparseSharedProjQCQP` | :class:`dolphindes.cvxopt.qcqp.DenseSharedProjQCQP` | None
+    QCQP : :class:`dolphindes.cvxopt.qcqp.SparseSharedProjQCQP` |
+        :class:`dolphindes.cvxopt.qcqp.DenseSharedProjQCQP` | None
         The QCQP instance for optimization.
     """
 
@@ -145,7 +146,7 @@ class Photonics_FDFD(ABC):
         self.M: Optional[sp.csc_array] = None
         self.EM_solver: Optional[Any] = None
         self.Ndes: Optional[int] = None
-        self.Plist: Optional[list] = None
+        self.Plist: Optional[list[sp.csc_array]] = None
         self.dense_s0: Optional[ComplexArray] = None
 
     def __deepcopy__(self, memo: dict[Any, Any]) -> "Photonics_FDFD":
@@ -228,7 +229,7 @@ class Photonics_FDFD(ABC):
 
             if A0 is not None:
                 if sp.issparse(A0):
-                    A0_dense = A0.toarray()
+                    A0_dense = cast(Any, A0).toarray()
                 else:
                     A0_dense = A0
                 self.A0 = sqrtW[:, None] * A0_dense * invSqrtW[None, :]
@@ -273,6 +274,8 @@ class Photonics_FDFD(ABC):
 
         check_attributes(self, "des_mask", "A0", "s0", "c0")
         assert self.des_mask is not None
+        assert self.A0 is not None
+        assert self.s0 is not None
         assert self.EM_solver is not None
 
         self.Ndes = int(np.sum(self.des_mask))
@@ -321,9 +324,12 @@ class Photonics_FDFD(ABC):
             A1_sparse = term1 - term2
             s1_sparse = W_mat @ (ei_des / 2)
 
+            A0_sp = cast(sp.csc_array, self.A0)
+            s0_vec = cast(ComplexArray, self.s0)
+
             self.QCQP = SparseSharedProjQCQP(
-                self.A0,
-                self.s0,
+                A0_sp,
+                s0_vec,
                 self.c0,
                 A1_sparse,
                 A2_sparse,
@@ -337,8 +343,13 @@ class Photonics_FDFD(ABC):
 
             assert self.G is not None
 
+            A0_dense: ComplexArray
             if sp.issparse(self.A0):
-                self.A0 = self.A0.toarray()
+                A0_dense = cast(Any, self.A0).toarray()
+            else:
+                A0_dense = cast(ComplexArray, self.A0)
+
+            s0_vec = cast(ComplexArray, self.s0)
 
             G_weighted = sqrtW[:, None] * self.G * invSqrtW[None, :]
             A1_dense = (
@@ -348,8 +359,8 @@ class Photonics_FDFD(ABC):
             A2_dense = sp.eye(self.Ndes, dtype=complex)
 
             self.QCQP = DenseSharedProjQCQP(
-                self.A0,
-                self.s0,
+                A0_dense,
+                s0_vec,
                 self.c0,
                 A1_dense,
                 s1_qcqp,
@@ -418,8 +429,13 @@ class Photonics_FDFD(ABC):
             (dual_value, lagrange_multipliers, gradient, hessian, primal_variable)
         """
         assert self.QCQP is not None
-        return self.QCQP.solve_current_dual_problem(
-            method=method, init_lags=init_lags, opt_params=opt_params
+        return cast(
+            Tuple[
+                float, FloatNDArray, FloatNDArray, Optional[FloatNDArray], ComplexArray
+            ],
+            self.QCQP.solve_current_dual_problem(
+                method=method, init_lags=init_lags, opt_params=opt_params
+            ),
         )
 
     def get_chi_inf(self) -> ComplexArray:
@@ -440,7 +456,8 @@ class Photonics_FDFD(ABC):
         if self.sparseQCQP:
             assert self.QCQP.A2 is not None
             # In sparse mode, x = Es and A2 = Ginv. Use A2 to map to P_phys.
-            # Area scaling is handled in the constraint matrices (A1, s0), not the variable.
+            # Area scaling is handled in the constraint matrices (A1, s0),
+            # not the variable.
             P = self.QCQP.A2 @ self.QCQP.current_xstar
             Es = self.QCQP.current_xstar
         else:

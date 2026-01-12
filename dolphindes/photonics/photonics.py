@@ -44,7 +44,8 @@ class Photonics_TM_FDFD(Photonics_FDFD):
     ----------
     EM_solver : :class:`dolphindes.maxwell.TM_FDFD` | None
         Electromagnetic field solver.
-    QCQP : :class:`dolphindes.cvxopt.qcqp.SparseSharedProjQCQP` | :class:`dolphindes.cvxopt.qcqp.DenseSharedProjQCQP` | None
+    QCQP : :class:`dolphindes.cvxopt.qcqp.SparseSharedProjQCQP` |
+           :class:`dolphindes.cvxopt.qcqp.DenseSharedProjQCQP` | None
         QCQP instance for optimization.
     Ginv : csc_array or None
         Inverse Green's function (sparse QCQP).
@@ -106,7 +107,7 @@ class Photonics_TM_FDFD(Photonics_FDFD):
         self.M: Optional[sp.csc_array] = None
         self.EM_solver: Optional[Union[TM_FDFD, TM_Polar_FDFD]] = None
         self.Ndes: Optional[int] = None
-        self.Plist: Optional[list] = None
+        self.Plist: Optional[list[sp.csc_array]] = None
         self.dense_s0: Optional[ComplexArray] = None
 
         if isinstance(geometry, CartesianFDFDGeometry):
@@ -140,7 +141,9 @@ class Photonics_TM_FDFD(Photonics_FDFD):
             )
 
         # structure adjoint
-        self.structure_objective: Callable[[NDArray, NDArray], float]
+        self.structure_objective: Callable[
+            [NDArray[np.floating], NDArray[np.floating]], float
+        ]
         if sparseQCQP:
             self.structure_objective = self.structure_objective_sparse
         else:
@@ -149,9 +152,10 @@ class Photonics_TM_FDFD(Photonics_FDFD):
     def __repr__(self) -> str:
         """Return string representation."""
         return (
-            f"Photonics_TM_FDFD(omega={self.omega}, geometry={self.geometry}, chi={self.chi}, "
-            f"des_mask={self.des_mask is not None}, ji={self.ji is not None}, "
-            f"ei={self.ei is not None}, chi_background={self.chi_background is not None}, "
+            f"Photonics_TM_FDFD(omega={self.omega}, geometry={self.geometry}, "
+            f"chi={self.chi}, des_mask={self.des_mask is not None}, "
+            f"ji={self.ji is not None}, ei={self.ei is not None}, "
+            f"chi_background={self.chi_background is not None}, "
             f"sparseQCQP={self.sparseQCQP})"
         )
 
@@ -223,6 +227,7 @@ class Photonics_TM_FDFD(Photonics_FDFD):
             If des_mask is not defined.
         """
         check_attributes(self, "des_mask")
+        assert self.des_mask is not None
         assert self.EM_solver is not None
         if self.sparseQCQP:
             self.Ginv, self.M = self.EM_solver.get_GaaInv(
@@ -323,6 +328,7 @@ class Photonics_TM_FDFD(Photonics_FDFD):
         assert self.A0 is not None
         assert self.s0 is not None
         assert self.ei is not None
+        assert self.chi is not None
 
         chigrid_dof, M_dof, es = self._get_dof_chigrid_M_es(dof)
         obj = np.real(-np.vdot(es, self.A0 @ es) + 2 * np.vdot(self.s0, es) + self.c0)

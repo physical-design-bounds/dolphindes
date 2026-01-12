@@ -19,6 +19,7 @@ import scipy.linalg as la
 
 from dolphindes.cvxopt._base_qcqp import _SharedProjQCQP
 from dolphindes.cvxopt.optimization import OptimizationHyperparameters
+from dolphindes.types import ComplexArray
 from dolphindes.util import CRdot, Sym
 
 
@@ -113,7 +114,9 @@ def merge_lead_constraints(QCQP: _SharedProjQCQP, merged_num: int = 2) -> None:
 
 
 def add_constraints(
-    QCQP: _SharedProjQCQP, added_Pdata_list: list, orthonormalize: bool = True
+    QCQP: _SharedProjQCQP,
+    added_Pdata_list: list[ComplexArray],
+    orthonormalize: bool = True,
 ) -> None:
     """
     Add new shared projection constraints into an existing QCQP.
@@ -246,6 +249,7 @@ def run_gcd(
     # get to feasible point
     # TODO: revamp find_feasible_lags
     QCQP.current_lags = QCQP.find_feasible_lags()
+    assert QCQP.current_lags is not None
 
     orthonormalize = gcd_params.orthonormalize
     max_proj_cstrt_num = gcd_params.max_proj_cstrt_num
@@ -274,7 +278,7 @@ def run_gcd(
 
     ## gcd loop
     gcd_iter_num = 0
-    gcd_prev_dual = np.inf
+    gcd_prev_dual: float = np.inf
     while True:
         gcd_iter_num += 1
         # solve current dual problem
@@ -284,6 +288,9 @@ def run_gcd(
         QCQP.solve_current_dual_problem(
             "newton", init_lags=QCQP.current_lags, opt_params=opt_params
         )
+        assert QCQP.current_dual is not None
+        assert QCQP.current_xstar is not None
+
         print(
             f"At GCD iteration #{gcd_iter_num}, best dual bound found is \
             {QCQP.current_dual}."
