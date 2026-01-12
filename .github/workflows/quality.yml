@@ -1,4 +1,4 @@
-  name: CI: Quality
+  name: "CI: Quality"
 
 on:
   pull_request:
