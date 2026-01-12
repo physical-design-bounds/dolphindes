@@ -28,4 +28,12 @@ jobs:
 
       - name: Run Full Test Suite
         shell: bash -l {0}
-        run: pytest
+        run: pytest --cov=dolphindes --cov-report=xml
+
+      - name: Upload coverage reports to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          slug: physical-design-bounds/dolphindes
+          files: ./coverage.xml
+          fail_ci_if_error: true
