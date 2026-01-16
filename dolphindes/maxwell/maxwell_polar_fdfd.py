@@ -79,7 +79,7 @@ class Maxwell_Polar_FDFD(ABC):
         self.ETA_0 = 1.0
         self.k = self.omega / self.C_0
 
-        self.r_grid: FloatNDArray = (np.arange(self.Nr) + 0.5) * self.dr
+        self.r_grid: FloatNDArray = (np.arange(self.Nr, dtype=float) + 0.5) * self.dr
         self.dphi = 2 * np.pi / self.n_sectors / self.Nphi
         self.phi_grid: FloatNDArray = cast(
             FloatNDArray,
@@ -340,7 +340,7 @@ class TM_Polar_FDFD(Maxwell_Polar_FDFD):
             else:
                 assert mask.size == self.Nr * self.Nphi, "mask has incompatible size"
                 m = mask.reshape((self.Nr, self.Nphi), order="F")
-            return cast(IntNDArray, np.nonzero(m.flatten(order="F"))[0])
+            return np.nonzero(m.flatten(order="F"))[0]
 
         design_lin = to_sector_lin_idx(design_mask)
         observe_lin = to_sector_lin_idx(observe_mask)
@@ -392,8 +392,8 @@ class TM_Polar_FDFD(Maxwell_Polar_FDFD):
         )
 
         flat_A_mask = A_mask.flatten(order="F")
-        designInd = cast(IntNDArray, np.nonzero(flat_A_mask)[0])
-        backgroundInd = cast(IntNDArray, np.nonzero(~flat_A_mask)[0])
+        designInd = np.nonzero(flat_A_mask)[0]
+        backgroundInd = np.nonzero(~flat_A_mask)[0]
 
         A = (M[:, backgroundInd])[backgroundInd, :]
         B = (M[:, designInd])[backgroundInd, :]
@@ -457,7 +457,7 @@ def plot_real_polar_field(
     if len(phi_grid) == 1:
         # Handle 1D radial case by expanding to full circle for visualization
         field_mesh = _as_polar_mesh(field, phi_grid, r_grid)
-        phi_grid = np.linspace(0, 2 * np.pi, 361, endpoint=True)
+        phi_grid = np.linspace(0, 2 * np.pi, 361, endpoint=True, dtype=float)
         field_mesh = np.tile(field_mesh, (1, len(phi_grid)))
     else:
         field_mesh = _as_polar_mesh(field, phi_grid, r_grid)
@@ -512,7 +512,7 @@ def plot_cplx_polar_field(
     if len(phi_grid) == 1:
         # Handle 1D radial case by expanding to full circle for visualization
         field_mesh = _as_polar_mesh(field, phi_grid, r_grid)
-        phi_grid = np.linspace(0, 2 * np.pi, 361, endpoint=True)
+        phi_grid = np.linspace(0, 2 * np.pi, 361, endpoint=True, dtype=float)
         field_mesh = np.tile(field_mesh, (1, len(phi_grid)))
     else:
         field_mesh = _as_polar_mesh(field, phi_grid, r_grid)

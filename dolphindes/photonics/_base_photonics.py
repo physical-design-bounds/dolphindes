@@ -324,8 +324,8 @@ class Photonics_FDFD(ABC):
             A1_sparse = term1 - term2
             s1_sparse = W_mat @ (ei_des / 2)
 
-            A0_sp = cast(sp.csc_array, self.A0)
-            s0_vec = cast(ComplexArray, self.s0)
+            A0_sp = self.A0
+            s0_vec = self.s0
 
             self.QCQP = SparseSharedProjQCQP(
                 A0_sp,
@@ -349,7 +349,7 @@ class Photonics_FDFD(ABC):
             else:
                 A0_dense = cast(ComplexArray, self.A0)
 
-            s0_vec = cast(ComplexArray, self.s0)
+            s0_vec = self.s0
 
             G_weighted = sqrtW[:, None] * self.G * invSqrtW[None, :]
             A1_dense = (
@@ -429,13 +429,8 @@ class Photonics_FDFD(ABC):
             (dual_value, lagrange_multipliers, gradient, hessian, primal_variable)
         """
         assert self.QCQP is not None
-        return cast(
-            Tuple[
-                float, FloatNDArray, FloatNDArray, Optional[FloatNDArray], ComplexArray
-            ],
-            self.QCQP.solve_current_dual_problem(
-                method=method, init_lags=init_lags, opt_params=opt_params
-            ),
+        return self.QCQP.solve_current_dual_problem(
+            method=method, init_lags=init_lags, opt_params=opt_params
         )
 
     def get_chi_inf(self) -> ComplexArray:

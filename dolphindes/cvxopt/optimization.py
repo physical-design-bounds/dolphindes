@@ -712,7 +712,7 @@ class Alt_Newton_GD(_Optimizer):
                             print("doing Newton step")
                             # print("xdir dot xgrad is", np.dot(xdir, self.xgrad))
                     except np.linalg.LinAlgError:
-                        doN = 0
+                        doN = False
                         if self.verbose >= 2:
                             print("Hessian is singular")
 

@@ -77,6 +77,9 @@ def merge_lead_constraints(QCQP: _SharedProjQCQP, merged_num: int = 2) -> None:
     if proj_cstrt_num < merged_num:
         raise ValueError("Number of constraints insufficient for size of merge.")
 
+    if QCQP.current_lags is None:
+        raise ValueError("Cannot merge constraints: QCQP.current_lags is None.")
+
     new_P = QCQP.Proj.Pstruct.astype(complex, copy=True)
     new_P.data[:] = 0.0
     for i in range(merged_num):
@@ -108,9 +111,7 @@ def merge_lead_constraints(QCQP: _SharedProjQCQP, merged_num: int = 2) -> None:
     QCQP.current_lags[0] = Pnorm
     QCQP.n_proj_constr = len(QCQP.Proj)
 
-    QCQP.current_grad = QCQP.current_hess = (
-        None  # in principle can merge dual derivatives but leave it undone for now
-    )
+    QCQP.current_grad = QCQP.current_hess = None
 
 
 def add_constraints(
