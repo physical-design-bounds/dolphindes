@@ -8,7 +8,6 @@ implementations optimized for different matrix structures.
 
 __all__ = ["SparseSharedProjQCQP", "DenseSharedProjQCQP"]
 
-import copy
 from typing import Any, cast
 
 import numpy as np
@@ -126,13 +125,7 @@ class SparseSharedProjQCQP(_SharedProjQCQP):
         )
 
     def __deepcopy__(self, memo: dict[int, Any]) -> "SparseSharedProjQCQP":
-        try:
-            new_QCQP = cast("SparseSharedProjQCQP", super().__deepcopy__(memo))
-        except TypeError:
-            # autoreload (often used in notebooks) breaks inheritance detection
-            new_QCQP = cast(
-                "SparseSharedProjQCQP", _SharedProjQCQP.__deepcopy__(self, memo)
-            )
+        new_QCQP = cast("SparseSharedProjQCQP", super().__deepcopy__(memo))
         if getattr(new_QCQP, "_initialize_Acho", None) is not None:
             new_QCQP._initialize_Acho()
         return new_QCQP
