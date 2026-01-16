@@ -1,2 +1,8 @@
 *.pyc
 __pycache__
+*.egg-info/
+
+.vscode/
+build/
+docs/_build/
+docs/api
