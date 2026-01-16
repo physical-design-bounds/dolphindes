@@ -630,10 +630,10 @@ class _SharedProjQCQP(ABC):
 
         if len(penalty_vectors) > 0:
             grad_out: Optional[FloatNDArray] = (
-                None if grad is None else cast(FloatNDArray, grad + grad_penalty)
+                None if grad is None else grad + grad_penalty
             )
             hess_out: Optional[FloatNDArray] = (
-                None if hess is None else cast(FloatNDArray, hess + hess_penalty)
+                None if hess is None else hess + hess_penalty
             )
             return (
                 dualval + dualval_penalty,
@@ -648,8 +648,8 @@ class _SharedProjQCQP(ABC):
         self,
         method: str,
         opt_params: Optional[OptimizationHyperparameters] = None,
-        init_lags: Optional[ArrayLike] = None,
-    ) -> Tuple[float, ArrayLike, ArrayLike, Optional[ArrayLike], ArrayLike]:
+        init_lags: Optional[FloatNDArray] = None,
+    ) -> Tuple[float, FloatNDArray, FloatNDArray, Optional[FloatNDArray], ComplexArray]:
         """
         Optimize the dual problem using 'newton' or 'bfgs'.
 
@@ -930,4 +930,4 @@ class _SharedProjQCQP(ABC):
             result = self.solve_current_dual_problem(
                 method, init_lags=self.current_lags
             )
-            yield result  # already matches the declared Iterator element type
+            yield result
