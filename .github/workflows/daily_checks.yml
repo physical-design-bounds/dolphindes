@@ -20,6 +20,8 @@ jobs:
           python-version: "3.10"
           auto-activate-base: false
           use-mamba: true 
+          miniforge-variant: Mambaforge
+          use-only-tar-bz2: true
 
       - name: Install Dev Dependencies
         shell: bash -l {0}
