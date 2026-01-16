@@ -12,19 +12,7 @@ import scipy.sparse as sp
 from dolphindes.cvxopt import GCDHyperparameters
 from dolphindes.cvxopt._base_qcqp import _SharedProjQCQP
 from dolphindes.types import ComplexArray
-from dolphindes.util import math_utils, print_underline
-
-# Plan:
-# 1. I want verlan code that works on just QCQPs, but this is hard for multiple reasons:
-#    a. I need a function that takes a QCQP and returns True if it is strongly dual
-#    b. I need A2inv^dagger s0, but I don't want to invert A2 inside QCQP unless absolutely necessary
-#       Maybe I can have a function that does this in QCQP, and you can override it if you know it?
-# 2. So instead I will write a general verlan scheme that works for QCQPs, but leaves some things not implemented.
-#    Then I will subclass it for Photonics and implement the missing pieces.
-# 3. Hopefully this means Sean or the others can use it for other problems too, such as subset sum.
-
-# So what are the components?
-# First,
+from dolphindes.util import math_utils
 
 
 @dataclass(frozen=True)
@@ -38,6 +26,7 @@ class VerlanHyperparameters:
         More options may be added in the future.
     delta : float
         Tolerance for checking strong duality. Default is 1e-3.
+        Bigger is less tolerant!
     max_iter : int | float
         Maximum number of Verlan iterations to perform. Default is np.inf.
     theta : float
@@ -97,10 +86,14 @@ def _single_solve(
     if prev_lags is not None and QCQP.is_dual_feasible(prev_lags):
         QCQP.current_lags = prev_lags
     else:
-        psd_idx = QCQP.add_single_constraint(None)
-        QCQP.current_lags = QCQP.find_feasible_lags(idx=psd_idx)
+        raise NotImplementedError("Reinitialization logic disabled for now.")
+        # psd_idx = QCQP.add_single_constraint(None)
+        # QCQP.current_lags = QCQP.find_feasible_lags(idx=psd_idx)
 
     QCQP.run_gcd(gcd_params)
+    QCQP.solve_current_dual_problem(
+        method="bfgs", init_lags=QCQP.current_lags, opt_params=None
+    )
 
 
 def scrape(QCQP: _SharedProjQCQP, theta: float) -> None:
@@ -122,9 +115,6 @@ def run_verlan(
     verlan_params: VerlanHyperparameters = VerlanHyperparameters(),
 ) -> "_SharedProjQCQP":
     assert QCQP is not None, "QCQP must be initialized to run verlan."
-    assert QCQP.strong_duality_checker is not None, (
-        "QCQP must have strong duality checker defined."
-    )
     tmp_QCQP = copy.deepcopy(QCQP)
 
     gcd_params = verlan_params.gcd_params
@@ -144,163 +134,154 @@ def run_verlan(
     if verlan_params.verbose >= 1:
         print("Original problem is not strongly dual. Violation: ", viol)
 
-    def check_strong_duality_wrapper(
-        some_QCQP: "_SharedProjQCQP", t_val: float
-    ) -> bool:
-        nonlocal current_t, current_sd, viol
-        _single_solve(some_QCQP, gcd_params, t_val, At)
-        viol_check, sd_local = some_QCQP.is_strongly_dual(
-            some_QCQP.current_xstar, tol=verlan_tol
-        )
-        if sd_local:
-            viol = viol_check
-        if verlan_params.verbose >= 1:
-            print(f"t = {t_val:.3e}, SD Violation = {viol_check:.3e}.")
-        current_t = t_val
-        current_sd = sd_local
-        return sd_local
+    return None
+    # def check_strong_duality_wrapper(
+    #     some_QCQP: "_SharedProjQCQP", t_val: float
+    # ) -> bool:
+    #     nonlocal current_t, current_sd, viol
+    #     _single_solve(some_QCQP, gcd_params, t_val, At)
+    #     viol_check, sd_local = some_QCQP.is_strongly_dual(
+    #         some_QCQP.current_xstar, tol=verlan_tol
+    #     )
+    #     if sd_local:
+    #         viol = viol_check
+    #     if verlan_params.verbose >= 1:
+    #         print(f"t = {t_val:.3e}, SD Violation = {viol_check:.3e}.")
+    #     current_t = t_val
+    #     current_sd = sd_local
+    #     return sd_local
 
-    # Step 1: find initial t with strong duality
-    if verlan_params.verbose >= 1:
-        print_underline("Finding t such that small problem is strongly dual...")
-    t_low = verlan_params.t_low
-    t_high = verlan_params.t_high
-    t_SD, success = math_utils.bool_binary_search(
-        func=lambda t_val: check_strong_duality_wrapper(tmp_QCQP, t_val),
-        low=t_low,
-        high=t_high,
-        tol=verlan_params.sd_search_tol,
-    )
-    assert success, (
-        "Failed! That shouldn't happen. Increase amount of loss in A(t) / lower t_low."
-    )
-    if verlan_params.verbose >= 1:
-        print(f"Found t_SD ≈ {t_SD:.3e} with strong duality. Violation: {viol:.3e}")
-        print_underline("Starting Verlan iterations...")
+    # # Step 1: find initial t with strong duality
+    # if verlan_params.verbose >= 1:
+    #     print_underline("Finding t such that small problem is strongly dual...")
+    # t_low = verlan_params.t_low
+    # t_high = verlan_params.t_high
+    # t_SD, success = math_utils.bool_binary_search(
+    #     func=lambda t_val: check_strong_duality_wrapper(tmp_QCQP, t_val),
+    #     low=t_low,
+    #     high=t_high,
+    #     tol=verlan_params.sd_search_tol,
+    # )
+    # assert success, (
+    #     "Failed! That shouldn't happen. Increase amount of loss in A(t) / lower t_low."
+    # )
+    # if verlan_params.verbose >= 1:
+    #     print(f"Found t_SD ≈ {t_SD:.3e} with strong duality. Violation: {viol:.3e}")
+    #     print_underline("Starting Verlan iterations...")
 
-    check_strong_duality_wrapper(tmp_QCQP, t_SD)
-    SD_QCQP = copy.deepcopy(tmp_QCQP)
+    # check_strong_duality_wrapper(tmp_QCQP, t_SD)
+    # SD_QCQP = copy.deepcopy(tmp_QCQP)
+    # # Track the t parameter of the last strongly dual solution for backtracking (logic fix)
+    # last_good_t = current_t
 
-    # Step 2: Verlan iterations
-    # Scrape and increase t until t=1 with strong duality
-    verlan_iter = 0
-    # Track how many times we've hit min delta_t at the same t
-    last_t_min_marker = None
-    min_at_t_hits = 0
+    # # Step 2: Verlan iterations
+    # # Scrape and increase t until t=1 with strong duality
+    # verlan_iter = 0
+    # # Track how many times we've hit min delta_t at the same t
+    # last_t_min_marker = None
+    # min_at_t_hits = 0
 
-    while True:
-        # 2.1: Check for convergence
-        if current_t >= 1.0 and current_sd:
-            if verlan_params.verbose >= 1:
-                print("Reached t = 1 with strong duality.")
-            break
-        if verlan_iter >= verlan_params.max_verlan_iters:
-            if verlan_params.verbose >= 1:
-                print("Reached maximum Verlan iterations without t = 1 strong duality.")
-            break
+    # while True:
+    #     # 2.1: Check for convergence
+    #     if current_t >= 1.0 and current_sd:
+    #         if verlan_params.verbose >= 1:
+    #             print("Reached t = 1 with strong duality.")
+    #         break
+    #     if verlan_iter >= verlan_params.max_verlan_iters:
+    #         if verlan_params.verbose >= 1:
+    #             print("Reached maximum Verlan iterations without t = 1 strong duality.")
+    #         break
 
-        prev_viol = viol
-        prev_sd = current_sd
+    #     # Check scrape condition at the start of loop
+    #     if not current_sd:
+    #         # If not strongly dual, attempt scraping n_theta times until strong duality.
+    #         scraped_success = False
+    #         for scrape_attempt in range(verlan_params.n_theta):
+    #             scrape(tmp_QCQP, verlan_params.theta)
+    #             sd_found = check_strong_duality_wrapper(tmp_QCQP, current_t)
+    #             if sd_found:
+    #                 scraped_success = True
+    #                 SD_QCQP = copy.deepcopy(tmp_QCQP)
+    #                 last_good_t = current_t
+    #                 if verlan_params.verbose >= 1:
+    #                     print(
+    #                         f"Found strong duality after {scrape_attempt + 1} "
+    #                         f"attempt(s)."
+    #                     )
+    #                 break
+    #         if not scraped_success:
+    #             if verlan_params.verbose >= 1:
+    #                 print(
+    #                     f"  Failed to find strong duality after "
+    #                     f"{verlan_params.n_theta} scraping attempts."
+    #                 )
 
-        if not current_sd:
-            # If not strongly dual, attempt scraping n_theta times until strong duality.
-            pre_scrape_QCQP = copy.deepcopy(tmp_QCQP)
-            scraped_success = False
-            for scrape_attempt in range(verlan_params.n_theta):
-                scrape(tmp_QCQP, verlan_params.theta)
-                sd_found = check_strong_duality_wrapper(tmp_QCQP, current_t)
-                if sd_found:
-                    scraped_success = True
-                    SD_QCQP = tmp_QCQP
-                    if verlan_params.verbose >= 1:
-                        print(
-                            f"Found strong duality after {scrape_attempt + 1} "
-                            f"attempt(s)."
-                        )
-                    break
-            if not scraped_success:
-                if verlan_params.verbose >= 1:
-                    print(
-                        f"  Failed to find strong duality after "
-                        f"{verlan_params.n_theta} scraping attempts."
-                    )
-                tmp_QCQP = pre_scrape_QCQP
-                current_sd = prev_sd
-                viol = prev_viol
-                current_delta_t = max(current_delta_t * 0.5, verlan_params.min_delta_t)
-                if verlan_params.verbose >= 1:
-                    print(f"Reducing delta_t to {current_delta_t:.3e}.")
-                # If we've hit the minimum delta_t twice at this t, give up.
-                if current_delta_t == verlan_params.min_delta_t:
-                    if last_t_min_marker == current_t:
-                        min_at_t_hits += 1
-                    else:
-                        last_t_min_marker = current_t
-                        min_at_t_hits = 1
-                    if min_at_t_hits >= 2:
-                        if verlan_params.verbose >= 1:
-                            print(
-                                f"delta_t hit minimum twice at t = {current_t:.3e}; giving up."
-                            )
-                        break
-                continue
-            else:
-                if verlan_params.verbose >= 1:
-                    print("Scraped successfully to strong duality.")
-                    print(f"Current t = {current_t:.3e}, violation = {viol:.3e}.")
-        else:
-            scraped_success = True
+    #             # Logic Fix: Only backtrack if scraping consistently fails
+    #             # Revert to last good state
+    #             tmp_QCQP = copy.deepcopy(SD_QCQP)
+    #             current_t = last_good_t
+    #             check_strong_duality_wrapper(
+    #                 tmp_QCQP, current_t
+    #             )  # Restore nonlocal state
+    #             current_sd = True
 
-        pre_increase_QCQP = copy.deepcopy(tmp_QCQP)
-        prev_t = current_t
-        prev_viol = viol
-        prev_sd = current_sd
-        t_new = min(current_t + current_delta_t, 1.0)
-        sd_after_increase = check_strong_duality_wrapper(tmp_QCQP, t_new)
-        if not sd_after_increase:
-            if verlan_params.verbose >= 1:
-                print(f"Failed to keep strong duality at t = {t_new:.3e}.")
-            tmp_QCQP = pre_increase_QCQP
-            current_t = prev_t
-            current_sd = prev_sd
-            viol = prev_viol
-            current_delta_t = max(current_delta_t * 0.5, verlan_params.min_delta_t)
-            if verlan_params.verbose >= 1:
-                print(f"Reducing delta_t to {current_delta_t:.3e}.")
-            # If we've hit the minimum delta_t twice at this t, give up.
-            if current_delta_t == verlan_params.min_delta_t:
-                if last_t_min_marker == current_t:
-                    min_at_t_hits += 1
-                else:
-                    last_t_min_marker = current_t
-                    min_at_t_hits = 1
-                if min_at_t_hits >= 2:
-                    if verlan_params.verbose >= 1:
-                        print(
-                            f"delta_t hit minimum twice at t = {current_t:.3e}; giving up."
-                        )
-                    break
-            continue
-        else:
-            SD_QCQP = copy.deepcopy(tmp_QCQP)
-            if current_delta_t < initial_delta_t:
-                increased_delta_t = min(
-                    current_delta_t * growth_factor, initial_delta_t
-                )
-                if verlan_params.verbose >= 1:
-                    print(f"Increasing delta_t to {increased_delta_t:.3e}.")
-                current_delta_t = increased_delta_t
-            # Successful t increase; moving t resets the per-t minimum-hit logic.
-            last_t_min_marker = current_t
-            min_at_t_hits = 0
+    #             current_delta_t = max(current_delta_t * 0.5, verlan_params.min_delta_t)
+    #             if verlan_params.verbose >= 1:
+    #                 print(
+    #                     f"Backtracking to t={current_t:.3e} and reducing delta_t to {current_delta_t:.3e}."
+    #                 )
 
-        verlan_iter += 1
-        if verlan_params.verbose >= 1:
-            print(
-                f"Verlan iteration {verlan_iter}: Successfully increased t to {t_new:.3e}. "
-                f"Violation: {viol:.3e}."
-            )
-        print()
+    #             # If we've hit the minimum delta_t twice at this t, give up.
+    #             if current_delta_t == verlan_params.min_delta_t:
+    #                 if last_t_min_marker == current_t:
+    #                     min_at_t_hits += 1
+    #                 else:
+    #                     last_t_min_marker = current_t
+    #                     min_at_t_hits = 1
+    #                 if min_at_t_hits >= 2:
+    #                     if verlan_params.verbose >= 1:
+    #                         print(
+    #                             f"delta_t hit minimum twice at t = {current_t:.3e}; giving up."
+    #                         )
+    #                     break
+    #             continue
+    #         else:
+    #             if verlan_params.verbose >= 1:
+    #                 print("Scraped successfully to strong duality.")
+    #                 print(f"Current t = {current_t:.3e}, violation = {viol:.3e}.")
 
-    # Finally, return with QCQP solved at t=1 (or best strongly dual solution reached)
-    return SD_QCQP
+    #     # Advance state
+    #     t_new = min(current_t + current_delta_t, 1.0)
+    #     sd_after_increase = check_strong_duality_wrapper(tmp_QCQP, t_new)
+
+    #     if not sd_after_increase:
+    #         if verlan_params.verbose >= 1:
+    #             print(
+    #                 f"Failed to keep strong duality at t = {t_new:.3e}. Attempting to scrape..."
+    #             )
+    #         # Logic Fix: Do NOT backtrack here. Loop around to attempt scraping at t_new.
+    #         continue
+    #     else:
+    #         SD_QCQP = copy.deepcopy(tmp_QCQP)
+    #         last_good_t = current_t
+    #         if current_delta_t < initial_delta_t:
+    #             increased_delta_t = min(
+    #                 current_delta_t * growth_factor, initial_delta_t
+    #             )
+    #             if verlan_params.verbose >= 1:
+    #                 print(f"Increasing delta_t to {increased_delta_t:.3e}.")
+    #             current_delta_t = increased_delta_t
+    #         # Successful t increase; moving t resets the per-t minimum-hit logic.
+    #         last_t_min_marker = current_t
+    #         min_at_t_hits = 0
+
+    #     verlan_iter += 1
+    #     if verlan_params.verbose >= 1:
+    #         print(
+    #             f"Verlan iteration {verlan_iter}: Successfully increased t to {t_new:.3e}. "
+    #             f"Violation: {viol:.3e}."
+    #         )
+    #     print()
+
+    # # Finally, return with QCQP solved at t=1 (or best strongly dual solution reached)
+    # return SD_QCQP

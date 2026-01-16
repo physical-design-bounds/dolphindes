@@ -5,6 +5,7 @@ from collections import namedtuple
 from typing import TYPE_CHECKING, Any, Callable, Iterator, Optional, Tuple, cast
 
 import numpy as np
+import scipy.linalg as la  # Added for dense eigenvalue checks
 import scipy.sparse as sp
 import scipy.sparse.linalg as spla
 from numpy.typing import ArrayLike, NDArray
@@ -204,6 +205,17 @@ class _SharedProjQCQP(ABC):
         if self.use_precomp:
             self.compute_precomputed_values()
 
+    def __deepcopy__(self, memo: dict[int, Any]) -> "_SharedProjQCQP":
+        cls = self.__class__
+        new_obj = cls.__new__(cls)
+        memo[id(self)] = new_obj
+        for k, v in self.__dict__.items():
+            if k == "Acho":
+                setattr(new_obj, k, None)
+            else:
+                setattr(new_obj, k, copy.deepcopy(v, memo))
+        return new_obj
+
     def reinitialize_A_operators(
         self,
         A0: ArrayLike | sp.csc_array,
@@ -243,6 +255,65 @@ class _SharedProjQCQP(ABC):
             self.compute_precomputed_values()
         elif hasattr(self, "_initialize_Acho"):
             self._initialize_Acho()
+
+    def set_is_strongly_dual(
+        self, func: Callable[[ComplexArray, float], Tuple[float, bool]]
+    ) -> None:
+        """Set a custom function to check for strong duality."""
+        self.strong_duality_checker = func  # type: ignore
+
+    def is_strongly_dual(
+        self, xstar: ComplexArray | None, tol: float = 1e-3
+    ) -> Tuple[float, bool]:
+        """
+        Check if the problem satisfies strong duality conditions (default: A is PD).
+
+        Parameters
+        ----------
+        xstar : ComplexArray
+            The primal solution (unused in default check).
+        tol : float
+            Tolerance for checking strict positivity of eigenvalues.
+
+        Returns
+        -------
+        violation : float
+            Amount of violation (tol - min_eig) if not PD, else 0.0.
+        is_sd : bool
+            True if strongly dual (PD implies unique primal), False otherwise.
+        """
+        if self.strong_duality_checker is not None and xstar is not None:
+            return self.strong_duality_checker(xstar, tol)  # type: ignore
+
+        if self.current_lags is None:
+            raise ValueError("Undefined lags, cannot check strong duality.")
+
+        A = self._get_total_A(self.current_lags)
+        min_eig: float
+
+        if sp.issparse(A):
+            try:
+                vals = spla.eigsh(
+                    A, k=1, sigma=0.0, which="LM", return_eigenvectors=False
+                )
+                min_eig = float(vals[0])
+            except (spla.ArpackNoConvergence, spla.ArpackError) as e:
+                if self.verbose > 0:
+                    print(f"Warning: eigsh failed in is_strongly_dual: {e}")
+                return tol, False
+        else:
+            vals = la.eigvalsh(A, subset_by_index=[0, 0])
+            min_eig = float(vals[0])
+
+        if min_eig < -1e-6:
+            warnings.warn(
+                f"Found negative eigenvalue {min_eig:.3e} in is_strongly_dual check."
+            )
+
+        is_sd = min_eig > tol
+        violation = max(0.0, tol - min_eig) if not is_sd else 0.0
+
+        return violation, is_sd
 
     def compute_precomputed_values(self) -> None:
         """

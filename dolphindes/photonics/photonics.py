@@ -409,27 +409,42 @@ class Photonics_TM_FDFD(Photonics_FDFD):
         """
         Get the A1, A2 matrix for the QCQP formulation.
 
-        Parameters
-        ----------
-        chi : complex
-            Susceptibility value.
-
-        Returns
-        -------
-        A1 : ndarray of complex
-            The A1 matrix.
+        Notes
+        -----
+        Must match the conventions in Photonics_FDFD.setup_QCQP():
+        - sparseQCQP=True  : A1 = Ginv^H W (conj(1/chi) I) - W,   A2 = Ginv
+        - sparseQCQP=False : A1 = conj(1/chi) I - Gw^H,           A2 = I
+                             where Gw = sqrt(W) G (1/sqrt(W))
         """
+        assert self.des_mask is not None
+
+        areas = self._get_design_areas()
+        Ndes = int(np.sum(self.des_mask))
+
         if self.sparseQCQP:
-            assert self.Ndes is not None
             assert self.Ginv is not None
-            A1 = sp.csc_array(
-                np.conj(1.0 / chi) * self.Ginv.conj().T - sp.eye(self.Ndes)
-            )
+            if self.Ginv.shape[0] != Ndes:
+                raise ValueError("Ginv size does not match design-region size (Ndes).")
+
+            W = sp.diags(areas, format="csc")
+            I = sp.eye_array(Ndes, dtype=complex, format="csc")
+
+            term1 = self.Ginv.conj().T @ (W @ (I * np.conj(1.0 / chi)))
+            term2 = W
+            A1 = sp.csc_array(term1 - term2)
             A2 = sp.csc_array(self.Ginv)
         else:
             assert self.G is not None
-            A1 = np.conj(1.0 / chi) * np.eye(self.G.shape[0]) - self.G.conj().T
-            A2 = np.eye(self.G.shape[0])  # Identity for dense QCQP
+            if self.G.shape[0] != Ndes:
+                raise ValueError("G size does not match design-region size (Ndes).")
+
+            sqrtW = np.sqrt(areas)
+            invSqrtW = 1.0 / sqrtW
+            G_weighted = sqrtW[:, None] * self.G * invSqrtW[None, :]
+
+            A1 = np.conj(1.0 / chi) * np.eye(Ndes) - G_weighted.conj().T
+            A2 = sp.eye_array(Ndes, dtype=complex, format="csc")
+
         return A1, A2
 
 
