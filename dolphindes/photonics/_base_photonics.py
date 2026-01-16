@@ -178,6 +178,11 @@ class Photonics_FDFD(ABC):
         assert self.des_mask is not None
         return self.des_mask.flatten(order=self._flatten_order)
 
+    def _get_design_areas(self) -> FloatNDArray:
+        """Pixel areas restricted to the design region (flatten-order aware)."""
+        des_mask_flat = self._get_des_mask_flat()
+        return cast(FloatNDArray, self.geometry.get_pixel_areas()[des_mask_flat])
+
     def set_objective(
         self,
         A0: Optional[Union[ComplexArray, sp.csc_array]] = None,
