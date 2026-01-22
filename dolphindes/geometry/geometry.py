@@ -105,13 +105,22 @@ class PolarFDFDGeometry(GeometryHyperparameters):
     Attributes
     ----------
     Nphi : int
-        Number of azimuthal grid points (in one sector if using symmetry).
+        Number of azimuthal grid points (in one irreducible region if using symmetry).
     Nr : int
         Number of radial grid points.
     Npml : int
-        Number of radial PML layers.
+        Width of outer radial PML layers in pixels.
     dr : float
         Radial grid spacing.
+    Npml_inner : int
+        Width of inner radial PML layers in pixels.
+        Default: 0
+    r_inner : float
+        Inner radius of computational domain.
+        Default: 0
+    mirror : bool
+        Whether reflection symmetry is assumed with Neumann boundary conditions.
+        Default: False
     n_sectors : int
         Number of rotational symmetry sectors (1 for full circle).
         Default: 1
@@ -130,6 +139,9 @@ class PolarFDFDGeometry(GeometryHyperparameters):
     Nr: int
     Npml: int
     dr: float
+    Npml_inner: int = 0
+    r_inner: float = 0.0
+    mirror: bool = False
     n_sectors: int = 1
     bloch_phase: float = 0.0
     m: int = 3
@@ -155,7 +167,11 @@ class PolarFDFDGeometry(GeometryHyperparameters):
         ndarray of float
             Flattened array of pixel areas.
         """
-        r_grid = (np.arange(self.Nr) + 0.5) * self.dr
+        #r_grid = self.r_inner + (np.arange(self.Nr) + 0.5) * self.dr
+        self.r_inner = max(self.r_inner, 0.5*self.dr)
+        r_grid = self.r_inner + np.arange(self.Nr) * self.dr
         dphi = 2 * np.pi / self.n_sectors / self.Nphi
+        if self.mirror:
+            dphi /= 2
         area_r = r_grid * self.dr * dphi
         return cast(FloatNDArray, np.kron(np.ones(self.Nphi), area_r))
