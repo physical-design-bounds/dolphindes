@@ -28,4 +28,4 @@ Here is a collection of notebooks demonstrating the capabilities of Dolphindes.
    Using inner PMLs in the polar solver <examples/solvers/polar_FDFD_inner_pml>
    Using mirror symmetry in the polar solver <examples/solvers/polar_FDFD_mirror_symmetry>
    Using rotational symmetry in the polar solver <examples/solvers/polar_FDFD_rotational_symmetry>
-   Custom Maxwell Solver <examples/custom_maxwell_solver>
+   Custom Maxwell Solver <examples/solvers/custom_maxwell_solver>
