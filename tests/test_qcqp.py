@@ -15,6 +15,225 @@ import scipy.sparse as sp
 from dolphindes.cvxopt import DenseSharedProjQCQP, SparseSharedProjQCQP
 
 
+def test_gcd_protected_projector_unchanged(sparse_qcqp_data):
+    """Protected projector entries must remain unchanged under GCD orthonormalization."""
+    from dolphindes.cvxopt import gcd
+
+    qcqp = sparse_qcqp_data["qcqp"]
+    idx = 0
+    P_before = qcqp.Proj.get_Pdata_column_stack().copy()
+
+    params = gcd.GCDHyperparameters(
+        orthonormalize=True,
+        protected_proj_indices=[idx],
+        max_gcd_iter_num=0,
+        max_proj_cstrt_num=qcqp.n_proj_constr + 2,
+    )
+    gcd.run_gcd(qcqp, params)
+
+    P_after = qcqp.Proj.get_Pdata_column_stack()
+    assert np.array_equal(P_before[:, idx], P_after[:, idx]), (
+        "Protected projector changed during GCD orthonormalization."
+    )
+
+
+def test_gcd_protection_can_block_compression(sparse_qcqp_data):
+    """GCD should raise if protected constraints prevent reaching max_proj_cstrt_num."""
+    from dolphindes.cvxopt import gcd
+
+    qcqp = sparse_qcqp_data["qcqp"]
+    protected = list(range(qcqp.n_proj_constr))
+
+    params = gcd.GCDHyperparameters(
+        orthonormalize=False,
+        protected_proj_indices=protected,
+        max_gcd_iter_num=1,
+        max_proj_cstrt_num=qcqp.n_proj_constr - 1,
+    )
+
+    with pytest.raises(ValueError, match="Cannot compress"):
+        gcd.run_gcd(qcqp, params)
+
+
+def test_freeze_protected_orthonormalize_others_invariants(sparse_qcqp_data):
+    """Directly test protected-freeze orthonormalization helper invariants."""
+    from dolphindes.cvxopt import gcd
+    from dolphindes.util import CRdot
+
+    qcqp = sparse_qcqp_data["qcqp"]
+    k = qcqp.n_proj_constr
+    assert k >= 2, "Need at least 2 projectors for this test."
+
+    proj_lags = np.linspace(-0.7, 0.9, k)
+    qcqp.current_lags = np.concatenate([proj_lags, np.zeros(qcqp.n_gen_constr)])
+
+    # Protect the first projector only (no need to assume protected are orthogonal).
+    protected_mask = gcd._get_gcd_protected_mask(qcqp, [0])
+
+    P_before = qcqp.Proj.get_Pdata_column_stack().copy()  # (nnz, k)
+    w_before = P_before @ proj_lags  # (nnz,)
+
+    gcd._freeze_protected_orthonormalize_others(qcqp, protected_mask)
+
+    P_after = qcqp.Proj.get_Pdata_column_stack()
+    proj_lags_after = qcqp.current_lags[:k]
+    w_after = P_after @ proj_lags_after
+
+    # Protected column must be numerically unchanged.
+    assert np.array_equal(P_before[:, 0], P_after[:, 0])
+
+    # Weighted combination must be preserved (basis change consistency).
+    assert np.allclose(w_before, w_after, atol=1e-10, rtol=1e-10)
+
+    # Unprotected constraints become orthonormal and orthogonal to protected span.
+    for j in range(1, k):
+        assert abs(CRdot(P_after[:, 0], P_after[:, j])) < 1e-10
+        assert abs(CRdot(P_after[:, j], P_after[:, j]) - 1.0) < 1e-10
+    for i in range(1, k):
+        for j in range(i + 1, k):
+            assert abs(CRdot(P_after[:, i], P_after[:, j])) < 1e-10
+
+
+def test_merge_selected_projector_constraints_preserves_weighted_sum(sparse_qcqp_data):
+    """Merging selected projector constraints should preserve Σ λ_j P_j in Pdata space."""
+    from dolphindes.cvxopt import gcd
+
+    qcqp = sparse_qcqp_data["qcqp"]
+    k = qcqp.n_proj_constr
+    assert k >= 2, "Need at least 2 projectors for this test."
+
+    # Deterministic multipliers.
+    proj_lags = np.linspace(-0.3, 1.1, k)
+    qcqp.current_lags = np.concatenate([proj_lags, np.zeros(qcqp.n_gen_constr)])
+    qcqp._gcd_protected_proj_mask = np.zeros(k, dtype=bool)
+
+    P_before = qcqp.Proj.get_Pdata_column_stack().copy()
+    w_before = P_before @ proj_lags
+
+    if k >= 4:
+        merge_indices = [1, 2, 3]
+    else:
+        merge_indices = [0, 1]
+
+    expected_k_after = k - (len(merge_indices) - 1)
+    gcd._merge_selected_projector_constraints(qcqp, merge_indices)
+
+    assert qcqp.n_proj_constr == expected_k_after
+    P_after = qcqp.Proj.get_Pdata_column_stack()
+    proj_lags_after = qcqp.current_lags[: qcqp.n_proj_constr]
+    w_after = P_after @ proj_lags_after
+    assert np.allclose(w_before, w_after, atol=1e-10, rtol=1e-10)
+
+
+def test_merge_selected_projector_constraints_rejects_protected(sparse_qcqp_data):
+    """Merging should fail if any selected index is protected."""
+    from dolphindes.cvxopt import gcd
+
+    qcqp = sparse_qcqp_data["qcqp"]
+    k = qcqp.n_proj_constr
+    assert k >= 2, "Need at least 2 projectors for this test."
+
+    proj_lags = np.linspace(0.2, 0.6, k)
+    qcqp.current_lags = np.concatenate([proj_lags, np.zeros(qcqp.n_gen_constr)])
+
+    # Protect one of the merge indices.
+    qcqp._gcd_protected_proj_mask = np.zeros(k, dtype=bool)
+    qcqp._gcd_protected_proj_mask[0] = True
+
+    with pytest.raises(ValueError, match="protected"):
+        gcd._merge_selected_projector_constraints(qcqp, [0, 1])
+
+
+@pytest.mark.slow
+def test_gcd_protected_identity_projectors_matches_unprotected(sparse_qcqp_data):
+    """GCD with protected (I, -1j I) should converge to a similar dual bound.
+
+    This is a regression test for the protected-constraints GCD path: protecting
+    the two identity projectors used by `sparse_qcqp_data` should not materially
+    change the converged bound relative to the unprotected run.
+    """
+    from dolphindes.cvxopt import gcd
+
+    # Keep runtime reasonable: the "local" fixture param is explicitly slow.
+    if sparse_qcqp_data["added_str"] != "global":
+        pytest.skip("Skip slow 'local' dataset for this regression test.")
+
+    A0 = sparse_qcqp_data["A0"]
+    A1 = sparse_qcqp_data["A1"]
+    A2 = sparse_qcqp_data["A2"]
+    s0 = sparse_qcqp_data["s0"]
+    s1 = sparse_qcqp_data["s1"]
+    c = sparse_qcqp_data["c"]
+    Pdiags = sparse_qcqp_data["Pdiags"]
+
+    def _make_qcqp() -> SparseSharedProjQCQP:
+        Projlist = [
+            sp.diags_array(Pdiags[:, j], format="csc") for j in range(Pdiags.shape[1])
+        ]
+        return SparseSharedProjQCQP(
+            A0, s0, c, A1, A2, s1, Projlist, Projlist[0], verbose=0
+        )
+
+    def _find_identity_indices(qcqp: SparseSharedProjQCQP) -> tuple[int, int]:
+        P = qcqp.Proj.get_Pdata_column_stack()
+        ones = np.ones((P.shape[0],), dtype=complex)
+
+        idx_I = None
+        idx_m1jI = None
+        for j in range(P.shape[1]):
+            if idx_I is None and np.allclose(P[:, j], ones, atol=0.0, rtol=0.0):
+                idx_I = j
+            if idx_m1jI is None and np.allclose(
+                P[:, j], (-1j) * ones, atol=0.0, rtol=0.0
+            ):
+                idx_m1jI = j
+            if idx_I is not None and idx_m1jI is not None:
+                break
+
+        if idx_I is None or idx_m1jI is None:
+            raise AssertionError(
+                "Could not locate identity projectors (I and -1j I) in sparse_qcqp_data."
+            )
+        return int(idx_I), int(idx_m1jI)
+
+    qcqp_ref = _make_qcqp()
+    idx_I, idx_m1jI = _find_identity_indices(qcqp_ref)
+
+    common_params = dict(
+        orthonormalize=True,
+        max_proj_cstrt_num=10,
+        max_gcd_iter_num=25,
+        gcd_iter_period=2,
+        gcd_tol=5e-4,
+        verbose=0,
+    )
+
+    qcqp_unprotected = _make_qcqp()
+    gcd.run_gcd(qcqp_unprotected, gcd.GCDHyperparameters(**common_params))
+    assert qcqp_unprotected.current_dual is not None
+
+    qcqp_protected = _make_qcqp()
+    gcd.run_gcd(
+        qcqp_protected,
+        gcd.GCDHyperparameters(
+            protected_proj_indices=[idx_I, idx_m1jI],
+            **common_params,
+        ),
+    )
+    assert qcqp_protected.current_dual is not None
+
+    # Protected constraints should not materially change the converged bound.
+    assert np.isclose(
+        qcqp_protected.current_dual,
+        qcqp_unprotected.current_dual,
+        rtol=5e-3,
+        atol=5e-3,
+    ), (
+        f"Protected GCD bound {qcqp_protected.current_dual} differs from "
+        f"unprotected bound {qcqp_unprotected.current_dual}."
+    )
+
+
 @pytest.fixture
 def data_dir():
     """Return the path to the reference data directory."""

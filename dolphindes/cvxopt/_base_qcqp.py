@@ -260,7 +260,7 @@ class _SharedProjQCQP(ABC):
         self, func: Callable[[ComplexArray, float], Tuple[float, bool]]
     ) -> None:
         """Set a custom function to check for strong duality."""
-        self.strong_duality_checker = func  # type: ignore
+        self.strong_duality_checker = func
 
     def is_strongly_dual(
         self, xstar: ComplexArray | None, tol: float = 1e-3
@@ -283,7 +283,7 @@ class _SharedProjQCQP(ABC):
             True if strongly dual (PD implies unique primal), False otherwise.
         """
         if self.strong_duality_checker is not None and xstar is not None:
-            return self.strong_duality_checker(xstar, tol)  # type: ignore
+            return self.strong_duality_checker(xstar, tol)
 
         if self.current_lags is None:
             raise ValueError("Undefined lags, cannot check strong duality.")
@@ -472,7 +472,11 @@ class _SharedProjQCQP(ABC):
         pass
 
     def find_feasible_lags(
-        self, start: float = 0.1, limit: float = 1e8, idx: int = 1
+        self,
+        start: float = 0.1,
+        limit: float = 1e8,
+        idx: int = 1,
+        init_lags: Optional[FloatNDArray] = None,
     ) -> FloatNDArray:
         """
         Heuristically find a dual feasible (PSD) set of Lagrange multipliers.
@@ -488,34 +492,55 @@ class _SharedProjQCQP(ABC):
             Upper bound before giving up.
         idx : int, default 1
             Index of the projector constraint to scale.
+        init_lags : FloatNDArray | None, default None
+            Optional warm-start for the feasibility search. If provided, the
+            algorithm keeps all entries fixed and only increases `lags[idx]`
+            until feasibility is achieved.
 
         Returns
         -------
         FloatNDArray
             Feasible initial lags (projector first, then zeros for general constraints).
         """
-        if self.current_lags is not None:
-            if self.is_dual_feasible(self.current_lags):
+        if init_lags is None:
+            if self.current_lags is not None and self.is_dual_feasible(
+                self.current_lags
+            ):
                 return self.current_lags
 
-        # Start with small positive lags
-        init_lags = np.random.random(self.n_proj_constr) * 1e-6
-        init_lags = np.append(init_lags, len(self.B_j) * [0.0])
+            # Start with small positive lags
+            lags = np.random.random(self.n_proj_constr) * 1e-6
+            lags = np.append(lags, len(self.B_j) * [0.0])
+        else:
+            lags = np.array(init_lags, dtype=float, copy=True)
+            if lags.shape != (self.n_proj_constr + self.n_gen_constr,):
+                expected = self.n_proj_constr + self.n_gen_constr
+                raise ValueError(
+                    "init_lags length mismatch with number of constraints. "
+                    f"Expected {expected}, got {lags.size}."
+                )
 
-        init_lags[idx] = start
-        while self.is_dual_feasible(init_lags) is False:
-            init_lags[idx] *= 1.5
-            if init_lags[idx] > limit:
+        if idx < 0 or idx >= self.n_proj_constr:
+            raise IndexError(
+                f"idx={idx} out of range for n_proj_constr={self.n_proj_constr}."
+            )
+
+        # Ensure the feasibility-search multiplier starts positive.
+        lags[idx] = max(float(start), float(lags[idx]))
+
+        while self.is_dual_feasible(lags) is False:
+            lags[idx] *= 1.5
+            if lags[idx] > limit:
                 raise ValueError(
                     "Could not find a feasible point for the dual problem."
                 )
 
         if self.verbose > 0:
             print(
-                f"Found feasible point for dual problem: {init_lags} with "
-                f"dualvalue {self.get_dual(init_lags)[0]}"
+                f"Found feasible point for dual problem: {lags} with "
+                f"dualvalue {self.get_dual(lags)[0]}"
             )
-        return init_lags
+        return lags
 
     def _get_PSD_penalty(self, lags: FloatNDArray) -> Tuple[ComplexArray, float]:
         """
