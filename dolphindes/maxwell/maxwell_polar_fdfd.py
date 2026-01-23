@@ -82,14 +82,18 @@ class Maxwell_Polar_FDFD(ABC):
         self.ETA_0 = 1.0
         self.k = self.omega / self.C_0
 
-        self.r_grid: FloatNDArray = self.r_inner + (np.arange(self.Nr, dtype=float) + 0.5) * self.dr
+        self.r_grid: FloatNDArray = (
+            self.r_inner + (np.arange(self.Nr, dtype=float) + 0.5) * self.dr
+        )
         self.dphi = 2 * np.pi / self.n_sectors / self.Nphi
         if self.mirror:
             self.dphi /= 2
-            assert self.bloch_phase == 0.0, "cannot use non-zero bloch phase for mirror symmetry."
+            assert self.bloch_phase == 0.0, (
+                "cannot use non-zero bloch phase for mirror symmetry."
+            )
         self.phi_grid: FloatNDArray = cast(
             FloatNDArray,
-            np.arange(self.Nphi) * self.dphi
+            np.arange(self.Nphi) * self.dphi,
             # np.linspace(0, 2 * np.pi / self.n_sectors, self.Nphi, endpoint=False),
         )
 
@@ -158,25 +162,28 @@ class TM_Polar_FDFD(Maxwell_Polar_FDFD):
         sigma_max = -(m + 1) * lnR / 2 / pml_width
         # depth in outer pml region
         l_outer_grid = r_grid - r_grid[-Npml]
-        l_outer_grid[l_outer_grid<0.0] = 0.0
+        l_outer_grid[l_outer_grid < 0.0] = 0.0
         # depth into inner PML region
         l_inner_grid = r_grid[Npml_inner] - r_grid
         l_inner_grid[l_inner_grid < 0.0] = 0.0
-        
-        s_grid = (1.0
-                  + 1j * sigma_max * (l_outer_grid / pml_width) ** m / omega
-                  + 1j * sigma_max * (l_inner_grid / pml_width) ** m / omega
-                  )
-        
-        rcplx_grid = (r_grid
-                      + 1j * sigma_max * l_outer_grid ** (m + 1) / omega / (m + 1) / pml_width**m
-                      - 1j * sigma_max * l_inner_grid ** (m + 1) / omega / (m + 1) / pml_width**m
-                      )
-        
-        sprime_grid = (1j * sigma_max * m * l_outer_grid ** (m - 1) / omega / pml_width**m
-                       - 1j * sigma_max * m * l_inner_grid ** (m - 1) / omega / pml_width**m
-                       )
-        
+
+        s_grid = (
+            1.0
+            + 1j * sigma_max * (l_outer_grid / pml_width) ** m / omega
+            + 1j * sigma_max * (l_inner_grid / pml_width) ** m / omega
+        )
+
+        rcplx_grid = (
+            r_grid
+            + 1j * sigma_max * l_outer_grid ** (m + 1) / omega / (m + 1) / pml_width**m
+            - 1j * sigma_max * l_inner_grid ** (m + 1) / omega / (m + 1) / pml_width**m
+        )
+
+        sprime_grid = (
+            1j * sigma_max * m * l_outer_grid ** (m - 1) / omega / pml_width**m
+            - 1j * sigma_max * m * l_inner_grid ** (m - 1) / omega / pml_width**m
+        )
+
         sinvsqr_grid = 1.0 / s_grid**2
         g_grid = 1.0 / (rcplx_grid * s_grid) - sprime_grid / s_grid**3
 
@@ -195,14 +202,11 @@ class TM_Polar_FDFD(Maxwell_Polar_FDFD):
         )
 
         # Radial first derivative
-        L += (
-            sp.kron(
-                sp.eye_array(Nphi),
-                sp.diags_array([-g_grid[1:], g_grid[:-1]], offsets=[-1, 1]),
-                format="csr",
-            )
-            / (2 * dr)
-        )
+        L += sp.kron(
+            sp.eye_array(Nphi),
+            sp.diags_array([-g_grid[1:], g_grid[:-1]], offsets=[-1, 1]),
+            format="csr",
+        ) / (2 * dr)
 
         # Azimuthal part with symmetry/Bloch boundary conditions
         phase_factor = np.exp(1j * bloch_phase)
@@ -217,7 +221,7 @@ class TM_Polar_FDFD(Maxwell_Polar_FDFD):
                 np.ones(Nphi - 1, dtype=complex),
             ]
             az_offsets = [0, 1, -1]
-            
+
             if mirror:
                 # Neumann boundary conditions
                 az_diags[0][0] = az_diags[0][-1] = -1.0
@@ -589,8 +593,11 @@ def plot_cplx_polar_field(
 
 
 def expand_symmetric_field(
-    field_symmetric: ComplexGrid, n_sectors: int, Nr: int, 
-    mirror: bool = False, m: int = 0
+    field_symmetric: ComplexGrid,
+    n_sectors: int,
+    Nr: int,
+    mirror: bool = False,
+    m: int = 0,
 ) -> ComplexArray:
     """
     Expand a symmetric field solution to the full circle, applying Bloch phase.
@@ -614,13 +621,15 @@ def expand_symmetric_field(
     Nphi_irreducible = len(field_symmetric) // Nr
 
     # Reshape to 2D (Nphi_sector, Nr) using the solver's C-order convention
-    field_irreducible = np.asarray(field_symmetric).reshape((Nphi_irreducible, Nr), order="C")
+    field_irreducible = np.asarray(field_symmetric).reshape(
+        (Nphi_irreducible, Nr), order="C"
+    )
 
     if mirror:
         # flip out mirror-symmetric field within a sector before tiling
-        field_2d = np.zeros((2*Nphi_irreducible,Nr), dtype=complex)
-        field_2d[:Nphi_irreducible,:] = field_irreducible
-        field_2d[-1:Nphi_irreducible-1:-1 , :] = field_2d[:Nphi_irreducible,:]
+        field_2d = np.zeros((2 * Nphi_irreducible, Nr), dtype=complex)
+        field_2d[:Nphi_irreducible, :] = field_irreducible
+        field_2d[-1 : Nphi_irreducible - 1 : -1, :] = field_2d[:Nphi_irreducible, :]
     else:
         field_2d = field_irreducible
 

@@ -30,7 +30,19 @@ class TestTMPolarFDFD:
         Npml = 10
         dr = 0.05
         n_sectors = request.param
-        geometry = PolarFDFDGeometry(Nphi, Nr, Npml, dr, n_sectors)
+        geometry = PolarFDFDGeometry(
+            Nphi=Nphi,
+            Nr=Nr,
+            Npml=Npml,
+            dr=dr,
+            n_sectors=n_sectors,
+            r_inner=0.0,
+            Npml_inner=0,
+            mirror=False,
+            bloch_phase=0.0,
+            m=3,
+            lnR=-16.0,
+        )
         return TM_Polar_FDFD(omega, geometry)
 
     def test_pixel_areas(self, basic_solver):
@@ -76,7 +88,19 @@ class TestPolarGreensFunction:
         dr = 0.05
         n_sectors = request.param
 
-        geometry = PolarFDFDGeometry(Nphi, Nr, Npml, dr, n_sectors)
+        geometry = PolarFDFDGeometry(
+            Nphi=Nphi,
+            Nr=Nr,
+            Npml=Npml,
+            dr=dr,
+            n_sectors=n_sectors,
+            r_inner=0.0,
+            Npml_inner=0,
+            mirror=False,
+            bloch_phase=0.0,
+            m=3,
+            lnR=-16.0,
+        )
         solver = TM_Polar_FDFD(omega, geometry)
 
         r_inner_des = 0.3
@@ -182,7 +206,19 @@ class TestPolarGreensFunction:
         Npml = 10
         dr = 0.05
 
-        geometry = PolarFDFDGeometry(Nphi, Nr, Npml, dr, n_sectors)
+        geometry = PolarFDFDGeometry(
+            Nphi=Nphi,
+            Nr=Nr,
+            Npml=Npml,
+            dr=dr,
+            n_sectors=n_sectors,
+            r_inner=0.0,
+            Npml_inner=0,
+            mirror=False,
+            bloch_phase=0.0,
+            m=3,
+            lnR=-16.0,
+        )
         solver = TM_Polar_FDFD(omega, geometry)
 
         # Design region: inner annulus
@@ -267,7 +303,19 @@ class TestGaaInv:
         dr = 0.05
         n_sectors = request.param
 
-        geometry = PolarFDFDGeometry(Nphi, Nr, Npml, dr, n_sectors)
+        geometry = PolarFDFDGeometry(
+            Nphi=Nphi,
+            Nr=Nr,
+            Npml=Npml,
+            dr=dr,
+            n_sectors=n_sectors,
+            r_inner=0.0,
+            Npml_inner=0,
+            mirror=False,
+            bloch_phase=0.0,
+            m=3,
+            lnR=-16.0,
+        )
         solver = TM_Polar_FDFD(omega, geometry)
 
         design_mask = np.zeros((Nr, Nphi), dtype=bool)
@@ -295,7 +343,19 @@ class TestGaaInv:
         Npml = 8
         dr = 0.05
 
-        geometry = PolarFDFDGeometry(Nphi, Nr, Npml, dr, n_sectors)
+        geometry = PolarFDFDGeometry(
+            Nphi=Nphi,
+            Nr=Nr,
+            Npml=Npml,
+            dr=dr,
+            n_sectors=n_sectors,
+            r_inner=0.0,
+            Npml_inner=0,
+            mirror=False,
+            bloch_phase=0.0,
+            m=3,
+            lnR=-16.0,
+        )
         solver = TM_Polar_FDFD(omega, geometry)
 
         design_mask = np.zeros((Nr, Nphi), dtype=bool)
@@ -332,7 +392,19 @@ class TestPolarPML:
         dr = 0.02
         n_sectors = 1
 
-        geometry = PolarFDFDGeometry(Nphi, Nr, Npml, dr, n_sectors=n_sectors, m=m)
+        geometry = PolarFDFDGeometry(
+            Nphi=Nphi,
+            Nr=Nr,
+            Npml=Npml,
+            dr=dr,
+            n_sectors=n_sectors,
+            r_inner=0.0,
+            Npml_inner=0,
+            mirror=False,
+            bloch_phase=0.0,
+            m=m,
+            lnR=-16.0,
+        )
         solver = TM_Polar_FDFD(omega, geometry)
 
         # use a symmetric ring source at the first radial bin
