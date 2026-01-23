@@ -147,6 +147,29 @@ class PolarFDFDGeometry(GeometryHyperparameters):
     m: int = 3
     lnR: float = -20.0
 
+    @property
+    def r_grid(self) -> FloatNDArray:
+        """Get the radial grid points."""
+        return cast(FloatNDArray, self.r_inner + (np.arange(self.Nr) + 0.5) * self.dr)
+
+    @property
+    def nonpmlNr(self) -> int:
+        """Get the number of radial grid points excluding PML regions."""
+        return self.Nr - self.Npml - self.Npml_inner
+
+    @property
+    def dphi(self) -> float:
+        """Get the azimuthal grid spacing."""
+        val = 2 * np.pi / self.n_sectors / self.Nphi
+        if self.mirror:
+            val /= 2
+        return val
+
+    @property
+    def phi_grid(self) -> FloatNDArray:
+        """Get the azimuthal grid points."""
+        return cast(FloatNDArray, np.arange(self.Nphi) * self.dphi)
+
     def get_grid_size(self) -> Tuple[int, int]:
         """
         Return grid dimensions.
@@ -167,11 +190,5 @@ class PolarFDFDGeometry(GeometryHyperparameters):
         ndarray of float
             Flattened array of pixel areas.
         """
-        #r_grid = self.r_inner + (np.arange(self.Nr) + 0.5) * self.dr
-        self.r_inner = max(self.r_inner, 0.5*self.dr)
-        r_grid = self.r_inner + np.arange(self.Nr) * self.dr
-        dphi = 2 * np.pi / self.n_sectors / self.Nphi
-        if self.mirror:
-            dphi /= 2
-        area_r = r_grid * self.dr * dphi
+        area_r = self.r_grid * self.dr * self.dphi
         return cast(FloatNDArray, np.kron(np.ones(self.Nphi), area_r))

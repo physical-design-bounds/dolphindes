@@ -48,30 +48,30 @@ class TestTMPolarFDFD:
     def test_pixel_areas(self, basic_solver):
         """Test pixel area computation."""
         areas = basic_solver.geometry.get_pixel_areas()
-        assert len(areas) == basic_solver.Nr * basic_solver.Nphi
+        assert len(areas) == basic_solver.geometry.Nr * basic_solver.geometry.Nphi
 
         # Check total area matches geometry (pi * R^2 / n_sectors)
-        R_max = basic_solver.Nr * basic_solver.dr
-        expected_total_area = (np.pi * R_max**2) / basic_solver.n_sectors
+        R_max = basic_solver.geometry.Nr * basic_solver.geometry.dr
+        expected_total_area = (np.pi * R_max**2) / basic_solver.geometry.n_sectors
         assert np.isclose(np.sum(areas), expected_total_area)
 
         # Check specific pixel area manually
         ir = 10
-        r_center = (ir + 0.5) * basic_solver.dr
-        dphi = 2 * np.pi / basic_solver.n_sectors / basic_solver.Nphi
-        expected_pixel_area = r_center * basic_solver.dr * dphi
+        r_center = (ir + 0.5) * basic_solver.geometry.dr
+        dphi = 2 * np.pi / basic_solver.geometry.n_sectors / basic_solver.geometry.Nphi
+        expected_pixel_area = r_center * basic_solver.geometry.dr * dphi
 
         # areas is flattened [r0..rNr-1, r0..rNr-1, ...], so index ir corresponds to that radius
         assert np.isclose(areas[ir], expected_pixel_area)
 
     def test_dipole_field(self, basic_solver):
         """Test dipole field computation."""
-        ir = basic_solver.Nr // 2
-        iphi = basic_solver.Nphi // 2
+        ir = basic_solver.geometry.Nr // 2
+        iphi = basic_solver.geometry.Nphi // 2
         Ez = basic_solver.get_TM_dipole_field(ir, iphi)
-        assert Ez.shape == (basic_solver.Nphi * basic_solver.Nr,)
+        assert Ez.shape == (basic_solver.geometry.Nphi * basic_solver.geometry.Nr,)
         # Field should be nonzero at source location
-        idx = iphi * basic_solver.Nr + ir
+        idx = iphi * basic_solver.geometry.Nr + ir
         assert np.abs(Ez[idx]) > 0
 
 
@@ -106,7 +106,7 @@ class TestPolarGreensFunction:
         r_inner_des = 0.3
         r_outer_des = 1.0
         design_mask = np.zeros((Nr, Nphi), dtype=bool)
-        for ir, r in enumerate(solver.r_grid):
+        for ir, r in enumerate(solver.geometry.r_grid):
             if r_inner_des <= r <= r_outer_des:
                 design_mask[ir, :] = True
 
@@ -133,7 +133,7 @@ class TestPolarGreensFunction:
             pixel_global = design_lin[des_idx]
 
             # Direct solve
-            J_full = np.zeros(solver.Nphi * solver.Nr, dtype=complex)
+            J_full = np.zeros(solver.geometry.Nphi * solver.geometry.Nr, dtype=complex)
             J_full[pixel_global] = 1.0 / area_vec[pixel_global]
             E_direct = solve(1j * solver.omega * J_full)
 
@@ -177,7 +177,7 @@ class TestPolarGreensFunction:
         pixel1, pixel2 = design_lin[idx1], design_lin[idx2]
 
         # Direct solve with both sources
-        J_full = np.zeros(solver.Nphi * solver.Nr, dtype=complex)
+        J_full = np.zeros(solver.geometry.Nphi * solver.geometry.Nr, dtype=complex)
         J_full[pixel1] = amp1 / area_vec[pixel1]
         J_full[pixel2] = amp2 / area_vec[pixel2]
         E_direct = solve(1j * solver.omega * J_full)
@@ -223,13 +223,13 @@ class TestPolarGreensFunction:
 
         # Design region: inner annulus
         design_mask = np.zeros((Nr, Nphi), dtype=bool)
-        for ir, r in enumerate(solver.r_grid):
+        for ir, r in enumerate(solver.geometry.r_grid):
             if 0.3 <= r <= 0.6:
                 design_mask[ir, :] = True
 
         # Observe region: outer annulus (non-overlapping)
         observe_mask = np.zeros((Nr, Nphi), dtype=bool)
-        for ir, r in enumerate(solver.r_grid):
+        for ir, r in enumerate(solver.geometry.r_grid):
             if 0.8 <= r <= 1.2:
                 observe_mask[ir, :] = True
 
@@ -246,7 +246,7 @@ class TestPolarGreensFunction:
         pixel_global = design_lin[des_idx]
 
         # Direct solve
-        J_full = np.zeros(solver.Nphi * solver.Nr, dtype=complex)
+        J_full = np.zeros(solver.geometry.Nphi * solver.geometry.Nr, dtype=complex)
         J_full[pixel_global] = 1.0 / area_vec[pixel_global]
         E_direct = solve(1j * solver.omega * J_full)
 
@@ -271,18 +271,18 @@ class TestPolarGreensFunction:
         solver, _, _ = greens_setup
         area_vec = solver.geometry.get_pixel_areas()
 
-        p1 = solver.Nr // 3
-        p2 = 2 * solver.Nr // 3
+        p1 = solver.geometry.Nr // 3
+        p2 = 2 * solver.geometry.Nr // 3
         A1 = area_vec[p1]
         A2 = area_vec[p2]
 
         # Field at 2 due to unit dipole moment source at 1
-        J1 = np.zeros(solver.Nphi * solver.Nr, dtype=complex)
+        J1 = np.zeros(solver.geometry.Nphi * solver.geometry.Nr, dtype=complex)
         J1[p1] = 1.0 / A1
         E21 = solver.get_TM_field(J1)[p2]
 
         # Field at 1 due to unit dipole moment source at 2
-        J2 = np.zeros(solver.Nphi * solver.Nr, dtype=complex)
+        J2 = np.zeros(solver.geometry.Nphi * solver.geometry.Nr, dtype=complex)
         J2[p2] = 1.0 / A2
         E12 = solver.get_TM_field(J2)[p1]
 
@@ -431,7 +431,7 @@ class TestPolarPML:
 
         # 2. Analytical: E = (omega * mu / 4) * H0(1)(k*r)
         skip = 5
-        r_phys = solver.r_grid[skip:idx_interface]
+        r_phys = solver.geometry.r_grid[skip:idx_interface]
         E_phys = Ez_radial[skip:idx_interface]
         E_anal = np.abs((omega / 4) * hankel1(0, omega * r_phys))
 
