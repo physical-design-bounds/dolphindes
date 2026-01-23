@@ -36,4 +36,4 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
           slug: physical-design-bounds/dolphindes
           files: ./coverage.xml
-          fail_ci_if_error: true
+          fail_ci_if_error: false
