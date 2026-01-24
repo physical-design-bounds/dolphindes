@@ -14,8 +14,8 @@ def CRdot(v1: ComplexArray, v2: ComplexArray) -> float:
     """
     Compute the inner product of two complex vectors over a real field.
 
-    In other words, the vectors have complex values but linear combination coefficients 
-    have to be real. This is the vector space for the complex QCQP constraints since 
+    In other words, the vectors have complex values but linear combination coefficients
+    have to be real. This is the vector space for the complex QCQP constraints since
     Lagrangian multipliers are real.
 
     Parameters

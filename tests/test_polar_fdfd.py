@@ -13,9 +13,7 @@ import scipy.sparse.linalg as spla
 from scipy.special import hankel1
 
 from dolphindes.geometry import PolarFDFDGeometry
-from dolphindes.maxwell import (
-    TM_Polar_FDFD,
-)
+from dolphindes.maxwell import TM_Polar_FDFD, expand_symmetric_field
 
 
 class TestTMPolarFDFD:
@@ -30,37 +28,151 @@ class TestTMPolarFDFD:
         Npml = 10
         dr = 0.05
         n_sectors = request.param
-        geometry = PolarFDFDGeometry(Nphi, Nr, Npml, dr, n_sectors)
+        geometry = PolarFDFDGeometry(
+            Nphi=Nphi,
+            Nr=Nr,
+            Npml=Npml,
+            dr=dr,
+            n_sectors=n_sectors,
+            r_inner=0.0,
+            Npml_inner=0,
+            mirror=False,
+            bloch_phase=0.0,
+            m=3,
+            lnR=-16.0,
+        )
         return TM_Polar_FDFD(omega, geometry)
 
     def test_pixel_areas(self, basic_solver):
         """Test pixel area computation."""
         areas = basic_solver.geometry.get_pixel_areas()
-        assert len(areas) == basic_solver.Nr * basic_solver.Nphi
+        assert len(areas) == basic_solver.geometry.Nr * basic_solver.geometry.Nphi
 
         # Check total area matches geometry (pi * R^2 / n_sectors)
-        R_max = basic_solver.Nr * basic_solver.dr
-        expected_total_area = (np.pi * R_max**2) / basic_solver.n_sectors
+        R_max = basic_solver.geometry.Nr * basic_solver.geometry.dr
+        expected_total_area = (np.pi * R_max**2) / basic_solver.geometry.n_sectors
         assert np.isclose(np.sum(areas), expected_total_area)
 
         # Check specific pixel area manually
         ir = 10
-        r_center = (ir + 0.5) * basic_solver.dr
-        dphi = 2 * np.pi / basic_solver.n_sectors / basic_solver.Nphi
-        expected_pixel_area = r_center * basic_solver.dr * dphi
+        r_center = (ir + 0.5) * basic_solver.geometry.dr
+        dphi = 2 * np.pi / basic_solver.geometry.n_sectors / basic_solver.geometry.Nphi
+        expected_pixel_area = r_center * basic_solver.geometry.dr * dphi
 
         # areas is flattened [r0..rNr-1, r0..rNr-1, ...], so index ir corresponds to that radius
         assert np.isclose(areas[ir], expected_pixel_area)
 
     def test_dipole_field(self, basic_solver):
         """Test dipole field computation."""
-        ir = basic_solver.Nr // 2
-        iphi = basic_solver.Nphi // 2
+        ir = basic_solver.geometry.Nr // 2
+        iphi = basic_solver.geometry.Nphi // 2
         Ez = basic_solver.get_TM_dipole_field(ir, iphi)
-        assert Ez.shape == (basic_solver.Nphi * basic_solver.Nr,)
+        assert Ez.shape == (basic_solver.geometry.Nphi * basic_solver.geometry.Nr,)
         # Field should be nonzero at source location
-        idx = iphi * basic_solver.Nr + ir
+        idx = iphi * basic_solver.geometry.Nr + ir
         assert np.abs(Ez[idx]) > 0
+
+
+class TestMirrorSymmetry:
+    """Test mirror symmetry with Neumann boundary conditions"""
+
+    @pytest.fixture()
+    def solvers(self):
+        wvlgth = 1.0
+        omega = 2 * np.pi / wvlgth
+        r_nonpml = 2.0  # center circle radius
+        w_pml = 0.5  # surrounding pml thickness
+        r_tot = r_nonpml + w_pml  # total computational domain radius
+
+        gpr = 30
+        # gpr = 60 # high res option
+        dr = 1.0 / gpr  # radial grid size
+        Nr = int(np.round(r_tot / dr))
+        Npml = int(np.round(w_pml / dr))
+
+        # setting azimuthal grid size. Note the azimuthal pixel width gets larger with radius
+        Nphi_full = 180  # this gives ~ 0.043 pixel width at the edge of computational domain for R_tot=2.5
+        # Nphi_full = 360 # high res option
+
+        # Example: 6-fold rotational symmetry and mirror symmetry (60° sectors, 30° half sectors)
+        n_sectors = 6
+
+        Nphi_sector = Nphi_full // n_sectors
+        Nphi_halfsector = (
+            Nphi_sector // 2
+        )  # azimuthal points in one 30° irreducible domain
+
+        geo_halfsector = PolarFDFDGeometry(
+            Nphi_halfsector, Nr, Npml, dr, n_sectors=n_sectors, mirror=True
+        )
+
+        FDFD_halfsector = TM_Polar_FDFD(omega, geo_halfsector)
+
+        geo_full = PolarFDFDGeometry(Nphi_full, Nr, Npml, dr)
+        FDFD_full = TM_Polar_FDFD(omega, geo_full)
+
+        return (FDFD_halfsector, FDFD_full)
+
+    def test_center_dipole(self, solvers):
+        """test Neumann boundaries for dipole source at the origin"""
+        FDFD_halfsector = solvers[0]
+        FDFD_full = solvers[1]
+        omega = FDFD_halfsector.omega
+        r_grid = FDFD_halfsector.geometry.r_grid
+        Nr = FDFD_halfsector.geometry.Nr
+        Nphi_halfsector = FDFD_halfsector.geometry.Nphi
+        n_sectors = FDFD_halfsector.geometry.n_sectors
+        Npml = FDFD_halfsector.geometry.Npml
+        dr = FDFD_halfsector.geometry.dr
+
+        J_r = np.zeros(Nr)
+        J_r[0] = 1.0 / (np.pi * dr**2)
+
+        J_center_dipole = np.kron(np.ones(Nphi_halfsector), J_r)
+
+        ## first test vacuum field against analytical result
+        E_center_dipole = FDFD_halfsector.get_TM_field(J_center_dipole)
+
+        analytic_E_grid = (-omega / 4) * hankel1(0, omega * r_grid)
+
+        rel_err = np.linalg.norm(
+            analytic_E_grid[5 : Nr - 2 * Npml] - E_center_dipole[5 : Nr - 2 * Npml]
+        )
+
+        rel_err /= np.linalg.norm(analytic_E_grid[5 : Nr - 2 * Npml])
+        assert rel_err < 1e-2, f"Relative error {rel_err} too large."
+
+        # introduce a structure
+        r_ring = 1.0  # center radius of ring
+        r_t = 0.3  # thickness of ring
+        r_inner = r_ring
+        r_outer = r_ring + r_t
+
+        # Create radial mask for the ring
+        chi_r_grid = np.zeros(Nr)
+        chi_r_grid[int(r_inner / dr) : int(r_outer / dr)] = 1.0
+
+        ## setup structure grid
+        chi_phi_grid = np.zeros(Nphi_halfsector, dtype=complex)
+        phi_start = 0  # start at phi = 0
+        phi_end = int(np.round(Nphi_halfsector / 2))
+        chi_phi_grid[phi_start:phi_end] = 1.0
+
+        chi_grid = np.kron(chi_phi_grid, chi_r_grid)
+
+        chi = 3.0 + 0.1j
+        chi_grid *= chi
+
+        E_struct = FDFD_halfsector.get_TM_field(J_center_dipole, chi_grid)
+        E_struct_full = expand_symmetric_field(E_struct, n_sectors, Nr, mirror=True)
+
+        J_full = expand_symmetric_field(J_center_dipole, n_sectors, Nr, mirror=True)
+        chi_grid_full = expand_symmetric_field(chi_grid, n_sectors, Nr, mirror=True)
+        E_full_reference = FDFD_full.get_TM_field(J_full, chi_grid_full)
+
+        rel_err = np.linalg.norm(E_struct_full - E_full_reference)
+        rel_err /= np.linalg.norm(E_struct_full)
+        assert rel_err < 1e-8, f"Relative error {rel_err} too large."
 
 
 class TestPolarGreensFunction:
@@ -76,13 +188,25 @@ class TestPolarGreensFunction:
         dr = 0.05
         n_sectors = request.param
 
-        geometry = PolarFDFDGeometry(Nphi, Nr, Npml, dr, n_sectors)
+        geometry = PolarFDFDGeometry(
+            Nphi=Nphi,
+            Nr=Nr,
+            Npml=Npml,
+            dr=dr,
+            n_sectors=n_sectors,
+            r_inner=0.0,
+            Npml_inner=0,
+            mirror=False,
+            bloch_phase=0.0,
+            m=3,
+            lnR=-16.0,
+        )
         solver = TM_Polar_FDFD(omega, geometry)
 
         r_inner_des = 0.3
         r_outer_des = 1.0
         design_mask = np.zeros((Nr, Nphi), dtype=bool)
-        for ir, r in enumerate(solver.r_grid):
+        for ir, r in enumerate(solver.geometry.r_grid):
             if r_inner_des <= r <= r_outer_des:
                 design_mask[ir, :] = True
 
@@ -109,7 +233,7 @@ class TestPolarGreensFunction:
             pixel_global = design_lin[des_idx]
 
             # Direct solve
-            J_full = np.zeros(solver.Nphi * solver.Nr, dtype=complex)
+            J_full = np.zeros(solver.geometry.Nphi * solver.geometry.Nr, dtype=complex)
             J_full[pixel_global] = 1.0 / area_vec[pixel_global]
             E_direct = solve(1j * solver.omega * J_full)
 
@@ -153,7 +277,7 @@ class TestPolarGreensFunction:
         pixel1, pixel2 = design_lin[idx1], design_lin[idx2]
 
         # Direct solve with both sources
-        J_full = np.zeros(solver.Nphi * solver.Nr, dtype=complex)
+        J_full = np.zeros(solver.geometry.Nphi * solver.geometry.Nr, dtype=complex)
         J_full[pixel1] = amp1 / area_vec[pixel1]
         J_full[pixel2] = amp2 / area_vec[pixel2]
         E_direct = solve(1j * solver.omega * J_full)
@@ -182,18 +306,30 @@ class TestPolarGreensFunction:
         Npml = 10
         dr = 0.05
 
-        geometry = PolarFDFDGeometry(Nphi, Nr, Npml, dr, n_sectors)
+        geometry = PolarFDFDGeometry(
+            Nphi=Nphi,
+            Nr=Nr,
+            Npml=Npml,
+            dr=dr,
+            n_sectors=n_sectors,
+            r_inner=0.0,
+            Npml_inner=0,
+            mirror=False,
+            bloch_phase=0.0,
+            m=3,
+            lnR=-16.0,
+        )
         solver = TM_Polar_FDFD(omega, geometry)
 
         # Design region: inner annulus
         design_mask = np.zeros((Nr, Nphi), dtype=bool)
-        for ir, r in enumerate(solver.r_grid):
+        for ir, r in enumerate(solver.geometry.r_grid):
             if 0.3 <= r <= 0.6:
                 design_mask[ir, :] = True
 
         # Observe region: outer annulus (non-overlapping)
         observe_mask = np.zeros((Nr, Nphi), dtype=bool)
-        for ir, r in enumerate(solver.r_grid):
+        for ir, r in enumerate(solver.geometry.r_grid):
             if 0.8 <= r <= 1.2:
                 observe_mask[ir, :] = True
 
@@ -210,7 +346,7 @@ class TestPolarGreensFunction:
         pixel_global = design_lin[des_idx]
 
         # Direct solve
-        J_full = np.zeros(solver.Nphi * solver.Nr, dtype=complex)
+        J_full = np.zeros(solver.geometry.Nphi * solver.geometry.Nr, dtype=complex)
         J_full[pixel_global] = 1.0 / area_vec[pixel_global]
         E_direct = solve(1j * solver.omega * J_full)
 
@@ -235,18 +371,18 @@ class TestPolarGreensFunction:
         solver, _, _ = greens_setup
         area_vec = solver.geometry.get_pixel_areas()
 
-        p1 = solver.Nr // 3
-        p2 = 2 * solver.Nr // 3
+        p1 = solver.geometry.Nr // 3
+        p2 = 2 * solver.geometry.Nr // 3
         A1 = area_vec[p1]
         A2 = area_vec[p2]
 
         # Field at 2 due to unit dipole moment source at 1
-        J1 = np.zeros(solver.Nphi * solver.Nr, dtype=complex)
+        J1 = np.zeros(solver.geometry.Nphi * solver.geometry.Nr, dtype=complex)
         J1[p1] = 1.0 / A1
         E21 = solver.get_TM_field(J1)[p2]
 
         # Field at 1 due to unit dipole moment source at 2
-        J2 = np.zeros(solver.Nphi * solver.Nr, dtype=complex)
+        J2 = np.zeros(solver.geometry.Nphi * solver.geometry.Nr, dtype=complex)
         J2[p2] = 1.0 / A2
         E12 = solver.get_TM_field(J2)[p1]
 
@@ -267,7 +403,19 @@ class TestGaaInv:
         dr = 0.05
         n_sectors = request.param
 
-        geometry = PolarFDFDGeometry(Nphi, Nr, Npml, dr, n_sectors)
+        geometry = PolarFDFDGeometry(
+            Nphi=Nphi,
+            Nr=Nr,
+            Npml=Npml,
+            dr=dr,
+            n_sectors=n_sectors,
+            r_inner=0.0,
+            Npml_inner=0,
+            mirror=False,
+            bloch_phase=0.0,
+            m=3,
+            lnR=-16.0,
+        )
         solver = TM_Polar_FDFD(omega, geometry)
 
         design_mask = np.zeros((Nr, Nphi), dtype=bool)
@@ -295,7 +443,19 @@ class TestGaaInv:
         Npml = 8
         dr = 0.05
 
-        geometry = PolarFDFDGeometry(Nphi, Nr, Npml, dr, n_sectors)
+        geometry = PolarFDFDGeometry(
+            Nphi=Nphi,
+            Nr=Nr,
+            Npml=Npml,
+            dr=dr,
+            n_sectors=n_sectors,
+            r_inner=0.0,
+            Npml_inner=0,
+            mirror=False,
+            bloch_phase=0.0,
+            m=3,
+            lnR=-16.0,
+        )
         solver = TM_Polar_FDFD(omega, geometry)
 
         design_mask = np.zeros((Nr, Nphi), dtype=bool)
@@ -332,7 +492,19 @@ class TestPolarPML:
         dr = 0.02
         n_sectors = 1
 
-        geometry = PolarFDFDGeometry(Nphi, Nr, Npml, dr, n_sectors=n_sectors, m=m)
+        geometry = PolarFDFDGeometry(
+            Nphi=Nphi,
+            Nr=Nr,
+            Npml=Npml,
+            dr=dr,
+            n_sectors=n_sectors,
+            r_inner=0.0,
+            Npml_inner=0,
+            mirror=False,
+            bloch_phase=0.0,
+            m=m,
+            lnR=-16.0,
+        )
         solver = TM_Polar_FDFD(omega, geometry)
 
         # use a symmetric ring source at the first radial bin
@@ -359,7 +531,7 @@ class TestPolarPML:
 
         # 2. Analytical: E = (omega * mu / 4) * H0(1)(k*r)
         skip = 5
-        r_phys = solver.r_grid[skip:idx_interface]
+        r_phys = solver.geometry.r_grid[skip:idx_interface]
         E_phys = Ez_radial[skip:idx_interface]
         E_anal = np.abs((omega / 4) * hankel1(0, omega * r_phys))
 
@@ -368,3 +540,70 @@ class TestPolarPML:
         assert rel_error < 0.05, (
             f"PML (m={m}) reflection check failed: error {rel_error}"
         )
+
+    def test_inner_pml(self):
+        """test consistency of nonpml fields when r_inner>0 and inner pml present"""
+        omega = 2 * np.pi
+        r_inner = 5.0
+        r_center = 3.0
+        w_pml_thin = 0.5
+        w_pml_thick = 1.0
+
+        r_delta = w_pml_thin + r_center + w_pml_thick
+        r_outer = r_inner + r_delta
+
+        gpr = 40
+        dr = 1.0 / gpr
+        Nr = int(r_delta / dr)
+
+        n_sectors = 6
+        Nphi_sector = int(2 * np.pi * r_outer / n_sectors / dr)
+
+        Npml_thin = int(w_pml_thin / dr)
+        Npml_thick = int(w_pml_thick / dr)
+
+        # flip thickness of inner and outer pml and compare consistency of fields
+        geo_1 = PolarFDFDGeometry(
+            Nphi_sector,
+            Nr,
+            Npml_thin,
+            dr,
+            n_sectors=n_sectors,
+            r_inner=r_inner,
+            Npml_inner=Npml_thick,
+        )
+
+        FDFD_1 = TM_Polar_FDFD(omega, geo_1)
+
+        geo_2 = PolarFDFDGeometry(
+            Nphi_sector,
+            Nr,
+            Npml_thick,
+            dr,
+            n_sectors=n_sectors,
+            r_inner=r_inner,
+            Npml_inner=Npml_thin,
+        )
+
+        FDFD_2 = TM_Polar_FDFD(omega, geo_2)
+
+        phi_grid_sector, r_grid, phi_grid_full = FDFD_1.get_symmetric_grids()
+
+        J_r_ind = Npml_thick + gpr // 4
+        J_m = n_sectors * 4  # adjust wave order here
+        J_rgrid = np.zeros(Nr, dtype=complex)
+        J_rgrid[J_r_ind] = 1.0 / (2 * np.pi * r_grid[J_r_ind] * dr)
+        J_phigrid = np.cos(phi_grid_sector * J_m)
+        J_grid = np.kron(J_phigrid, J_rgrid)
+
+        E_IPML_1 = FDFD_1.get_TM_field(J_grid)
+        E_IPML_2 = FDFD_2.get_TM_field(J_grid)
+
+        test_ind_l = Npml_thick + 10
+        test_ind_r = Nr - (Npml_thick + 10)
+
+        rel_err = np.linalg.norm(
+            E_IPML_1[test_ind_l:test_ind_r] - E_IPML_2[test_ind_l:test_ind_r]
+        )
+        rel_err /= np.linalg.norm(E_IPML_1[test_ind_l:-test_ind_r])
+        assert rel_err < 1e-3, f"inner pml relative err{rel_err} too large."
