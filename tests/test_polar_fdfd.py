@@ -13,9 +13,7 @@ import scipy.sparse.linalg as spla
 from scipy.special import hankel1
 
 from dolphindes.geometry import PolarFDFDGeometry
-from dolphindes.maxwell import (
-    TM_Polar_FDFD, expand_symmetric_field
-)
+from dolphindes.maxwell import TM_Polar_FDFD, expand_symmetric_field
 
 
 class TestTMPolarFDFD:
@@ -77,40 +75,44 @@ class TestTMPolarFDFD:
 
 class TestMirrorSymmetry:
     """Test mirror symmetry with Neumann boundary conditions"""
+
     @pytest.fixture()
     def solvers(self):
         wvlgth = 1.0
-        omega = 2*np.pi / wvlgth
-        r_nonpml = 2.0 # center circle radius
-        w_pml = 0.5 # surrounding pml thickness
-        r_tot = r_nonpml + w_pml # total computational domain radius
-        
+        omega = 2 * np.pi / wvlgth
+        r_nonpml = 2.0  # center circle radius
+        w_pml = 0.5  # surrounding pml thickness
+        r_tot = r_nonpml + w_pml  # total computational domain radius
+
         gpr = 30
-        #gpr = 60 # high res option
-        dr = 1.0/gpr # radial grid size
+        # gpr = 60 # high res option
+        dr = 1.0 / gpr  # radial grid size
         Nr = int(np.round(r_tot / dr))
         Npml = int(np.round(w_pml / dr))
-        
+
         # setting azimuthal grid size. Note the azimuthal pixel width gets larger with radius
-        Nphi_full = 180 # this gives ~ 0.043 pixel width at the edge of computational domain for R_tot=2.5
-        #Nphi_full = 360 # high res option
-        
+        Nphi_full = 180  # this gives ~ 0.043 pixel width at the edge of computational domain for R_tot=2.5
+        # Nphi_full = 360 # high res option
+
         # Example: 6-fold rotational symmetry and mirror symmetry (60° sectors, 30° half sectors)
         n_sectors = 6
 
         Nphi_sector = Nphi_full // n_sectors
-        Nphi_halfsector = Nphi_sector // 2  # azimuthal points in one 30° irreducible domain
+        Nphi_halfsector = (
+            Nphi_sector // 2
+        )  # azimuthal points in one 30° irreducible domain
 
-        geo_halfsector = PolarFDFDGeometry(Nphi_halfsector, Nr, Npml, dr, 
-                                       n_sectors=n_sectors, mirror=True)
-    
+        geo_halfsector = PolarFDFDGeometry(
+            Nphi_halfsector, Nr, Npml, dr, n_sectors=n_sectors, mirror=True
+        )
+
         FDFD_halfsector = TM_Polar_FDFD(omega, geo_halfsector)
-        
+
         geo_full = PolarFDFDGeometry(Nphi_full, Nr, Npml, dr)
         FDFD_full = TM_Polar_FDFD(omega, geo_full)
-        
+
         return (FDFD_halfsector, FDFD_full)
-    
+
     def test_center_dipole(self, solvers):
         """test Neumann boundaries for dipole source at the origin"""
         FDFD_halfsector = solvers[0]
@@ -119,60 +121,60 @@ class TestMirrorSymmetry:
         r_grid = FDFD_halfsector.geometry.r_grid
         Nr = FDFD_halfsector.geometry.Nr
         Nphi_halfsector = FDFD_halfsector.geometry.Nphi
-        Nphi_full = FDFD_full.geometry.Nphi
         n_sectors = FDFD_halfsector.geometry.n_sectors
         Npml = FDFD_halfsector.geometry.Npml
         dr = FDFD_halfsector.geometry.dr
-        
+
         J_r = np.zeros(Nr)
-        J_r[0] = 1.0 / (np.pi* dr**2)
+        J_r[0] = 1.0 / (np.pi * dr**2)
 
         J_center_dipole = np.kron(np.ones(Nphi_halfsector), J_r)
-        
+
         ## first test vacuum field against analytical result
         E_center_dipole = FDFD_halfsector.get_TM_field(J_center_dipole)
-        
-        analytic_E_grid = (-omega/4) * hankel1(0, omega*r_grid)
-        
-        rel_err = np.linalg.norm(analytic_E_grid[5:Nr-2*Npml] 
-                                 - E_center_dipole[5:Nr-2*Npml])
-        
-        rel_err /= np.linalg.norm(analytic_E_grid[5:Nr-2*Npml])
+
+        analytic_E_grid = (-omega / 4) * hankel1(0, omega * r_grid)
+
+        rel_err = np.linalg.norm(
+            analytic_E_grid[5 : Nr - 2 * Npml] - E_center_dipole[5 : Nr - 2 * Npml]
+        )
+
+        rel_err /= np.linalg.norm(analytic_E_grid[5 : Nr - 2 * Npml])
         assert rel_err < 1e-2, f"Relative error {rel_err} too large."
-    
+
         # introduce a structure
         r_ring = 1.0  # center radius of ring
-        r_t = 0.3     # thickness of ring
+        r_t = 0.3  # thickness of ring
         r_inner = r_ring
         r_outer = r_ring + r_t
-        
+
         # Create radial mask for the ring
         chi_r_grid = np.zeros(Nr)
-        chi_r_grid[int(r_inner/dr):int(r_outer/dr)] = 1.0
-        
+        chi_r_grid[int(r_inner / dr) : int(r_outer / dr)] = 1.0
+
         ## setup structure grid
         chi_phi_grid = np.zeros(Nphi_halfsector, dtype=complex)
         phi_start = 0  # start at phi = 0
         phi_end = int(np.round(Nphi_halfsector / 2))
         chi_phi_grid[phi_start:phi_end] = 1.0
-        
+
         chi_grid = np.kron(chi_phi_grid, chi_r_grid)
 
         chi = 3.0 + 0.1j
         chi_grid *= chi
-        
+
         E_struct = FDFD_halfsector.get_TM_field(J_center_dipole, chi_grid)
         E_struct_full = expand_symmetric_field(E_struct, n_sectors, Nr, mirror=True)
-        
+
         J_full = expand_symmetric_field(J_center_dipole, n_sectors, Nr, mirror=True)
         chi_grid_full = expand_symmetric_field(chi_grid, n_sectors, Nr, mirror=True)
         E_full_reference = FDFD_full.get_TM_field(J_full, chi_grid_full)
-        
+
         rel_err = np.linalg.norm(E_struct_full - E_full_reference)
         rel_err /= np.linalg.norm(E_struct_full)
         assert rel_err < 1e-8, f"Relative error {rel_err} too large."
-    
-    
+
+
 class TestPolarGreensFunction:
     """Test Green's function computation and properties."""
 
@@ -538,60 +540,70 @@ class TestPolarPML:
         assert rel_error < 0.05, (
             f"PML (m={m}) reflection check failed: error {rel_error}"
         )
-    
+
     def test_inner_pml(self):
         """test consistency of nonpml fields when r_inner>0 and inner pml present"""
-        omega = 2*np.pi
+        omega = 2 * np.pi
         r_inner = 5.0
         r_center = 3.0
         w_pml_thin = 0.5
         w_pml_thick = 1.0
-        
+
         r_delta = w_pml_thin + r_center + w_pml_thick
         r_outer = r_inner + r_delta
-        
+
         gpr = 40
         dr = 1.0 / gpr
         Nr = int(r_delta / dr)
-        
+
         n_sectors = 6
-        Nphi_sector = int(2*np.pi*r_outer / n_sectors / dr)
-        
+        Nphi_sector = int(2 * np.pi * r_outer / n_sectors / dr)
+
         Npml_thin = int(w_pml_thin / dr)
         Npml_thick = int(w_pml_thick / dr)
-        
+
         # flip thickness of inner and outer pml and compare consistency of fields
-        geo_1 = PolarFDFDGeometry(Nphi_sector, Nr, Npml_thin, dr, 
-                                  n_sectors=n_sectors,
-                                  r_inner=r_inner,
-                                  Npml_inner=Npml_thick)
-        
+        geo_1 = PolarFDFDGeometry(
+            Nphi_sector,
+            Nr,
+            Npml_thin,
+            dr,
+            n_sectors=n_sectors,
+            r_inner=r_inner,
+            Npml_inner=Npml_thick,
+        )
+
         FDFD_1 = TM_Polar_FDFD(omega, geo_1)
-        
-        geo_2 = PolarFDFDGeometry(Nphi_sector, Nr, Npml_thick, dr, 
-                                  n_sectors=n_sectors,
-                                  r_inner=r_inner,
-                                  Npml_inner=Npml_thin)
-        
+
+        geo_2 = PolarFDFDGeometry(
+            Nphi_sector,
+            Nr,
+            Npml_thick,
+            dr,
+            n_sectors=n_sectors,
+            r_inner=r_inner,
+            Npml_inner=Npml_thin,
+        )
+
         FDFD_2 = TM_Polar_FDFD(omega, geo_2)
-        
+
         phi_grid_sector, r_grid, phi_grid_full = FDFD_1.get_symmetric_grids()
-        
+
         J_r_ind = Npml_thick + gpr // 4
-        J_m = n_sectors * 4 # adjust wave order here
+        J_m = n_sectors * 4  # adjust wave order here
         J_rgrid = np.zeros(Nr, dtype=complex)
-        J_rgrid[J_r_ind] = 1.0 / (2*np.pi*r_grid[J_r_ind]*dr)
+        J_rgrid[J_r_ind] = 1.0 / (2 * np.pi * r_grid[J_r_ind] * dr)
         J_phigrid = np.cos(phi_grid_sector * J_m)
         J_grid = np.kron(J_phigrid, J_rgrid)
-        
 
         E_IPML_1 = FDFD_1.get_TM_field(J_grid)
         E_IPML_2 = FDFD_2.get_TM_field(J_grid)
-        
-        
+
         test_ind_l = Npml_thick + 10
         test_ind_r = Nr - (Npml_thick + 10)
 
-        rel_err = np.linalg.norm(E_IPML_1[test_ind_l:test_ind_r] - E_IPML_2[test_ind_l:test_ind_r])
+        rel_err = np.linalg.norm(
+            E_IPML_1[test_ind_l:test_ind_r] - E_IPML_2[test_ind_l:test_ind_r]
+        )
         rel_err /= np.linalg.norm(E_IPML_1[test_ind_l:-test_ind_r])
         assert rel_err < 1e-3, f"inner pml relative err{rel_err} too large."

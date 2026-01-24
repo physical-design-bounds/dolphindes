@@ -5,14 +5,14 @@ from typing import Any
 
 def check_attributes(self: Any, *attrs: str) -> None:
     """Check that specified attributes are not None.
-    
+
     Parameters
     ----------
     self : Any
         The object instance to check attributes on.
     *attrs : str
         Variable number of attribute names to check.
-        
+
     Raises
     ------
     AttributeError
