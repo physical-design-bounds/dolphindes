@@ -523,3 +523,15 @@ class TM_FDFD(Maxwell_FDFD):
         GaaInv = (D - (C @ AinvB)) * Gfac
 
         return GaaInv, M
+
+    def get_M(self, chigrid: ComplexGrid | None = None) -> sp.csc_array:
+        """
+        Assemble the full Maxwell operator M (vacuum or with susceptibility).
+
+        This is the cheap part needed for 'solver_only' workflows.
+        """
+        return (
+            self.M0 + self._get_diagM_from_chigrid(chigrid)
+            if chigrid is not None
+            else self.M0
+        )

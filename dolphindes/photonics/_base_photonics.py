@@ -223,16 +223,17 @@ class Photonics_FDFD(ABC):
             if denseToSparse:
                 raise ValueError("Cannot use denseToSparse=True when sparseQCQP=False.")
 
-            # Transform physical inputs to weighted current basis (x = sqrt(W) J)
+            # Transform physical inputs to weighted current basis (x = sqrt(W) P)
             sqrtW = np.sqrt(areas)
             invSqrtW = 1.0 / sqrtW
 
             if A0 is not None:
-                if sp.issparse(A0):
-                    A0_dense = cast(Any, A0).toarray()
-                else:
-                    A0_dense = A0
-                self.A0 = sqrtW[:, None] * A0_dense * invSqrtW[None, :]
+                # Do not convert A0 to dense here if it is sparse.
+                # We will do it automatically before making the QCQP if necessary.
+                # This allows using the solver with large sparse A0 matrices
+                # even in "dense" mode / coordinates that don't require
+                # computing Ginv.
+                self.A0 = sqrtW[:, None] * A0 * invSqrtW[None, :]
 
             if s0 is not None:
                 # Vector Scaling: sqrtW * s0

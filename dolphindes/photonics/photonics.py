@@ -72,6 +72,7 @@ class Photonics_TM_FDFD(Photonics_FDFD):
         A0: Optional[Union[ComplexArray, sp.csc_array]] = None,
         s0: Optional[ComplexArray] = None,
         c0: float = 0.0,
+        solver_only: bool = False,
     ) -> None:
         """
         Initialize Photonics_TM_FDFD.
@@ -100,6 +101,9 @@ class Photonics_TM_FDFD(Photonics_FDFD):
             Objective linear vector.
         c0 : float, optional
             Objective constant. Default: 0.0
+        solver_only : bool, optional
+            If True, only set up the EM solver without computing the Green's function
+            (necessary for bounds).
         """
         self.des_mask = des_mask
         self.Ginv: Optional[sp.csc_array] = None
@@ -132,7 +136,7 @@ class Photonics_TM_FDFD(Photonics_FDFD):
         try:
             check_attributes(self, "omega", "geometry", "chi", "des_mask", "sparseQCQP")
             self.setup_EM_solver(geometry)
-            self.setup_EM_operators()
+            self.setup_EM_operators(solver_only)
         except AttributeError:
             warnings.warn(
                 "Photonics_TM_FDFD initialized with missing attributes "
@@ -208,7 +212,7 @@ class Photonics_TM_FDFD(Photonics_FDFD):
         else:
             raise TypeError(f"Unsupported geometry type: {type(self.geometry)}")
 
-    def setup_EM_operators(self) -> None:
+    def setup_EM_operators(self, solver_only: bool = False) -> None:
         """
         Set up electromagnetic operators for the design region and background.
 
@@ -229,28 +233,31 @@ class Photonics_TM_FDFD(Photonics_FDFD):
         check_attributes(self, "des_mask")
         assert self.des_mask is not None
         assert self.EM_solver is not None
+
         if self.sparseQCQP:
-            self.Ginv, self.M = self.EM_solver.get_GaaInv(
-                self.des_mask, self.chi_background
-            )
-        else:
-            if self.chi_background is None:
-                self.M = self.EM_solver.M0
-                self.G = self.EM_solver.get_TM_Gba(self.des_mask, self.des_mask)
+            if solver_only:
+                self.M = self.EM_solver.get_M(self.chi_background)
+                self.Ginv = None
             else:
-                self.M = self.EM_solver.M0 + self.EM_solver._get_diagM_from_chigrid(
-                    self.chi_background
+                self.Ginv, self.M = self.EM_solver.get_GaaInv(
+                    self.des_mask, self.chi_background
                 )
-                assert self.des_mask is not None
-                Id = np.diag(
-                    self.des_mask.astype(complex).flatten(order=self._flatten_order)
-                )[:, self.des_mask.flatten(order=self._flatten_order)]
-                self.G = (
-                    self.omega**2
-                    * np.linalg.solve(self.M.toarray(), Id)[
-                        self.des_mask.flatten(order=self._flatten_order), :
-                    ]
-                )
+        else:
+            self.M = self.EM_solver.get_M(self.chi_background)
+
+            if not solver_only:
+                if self.chi_background is None:
+                    self.G = self.EM_solver.get_TM_Gba(self.des_mask, self.des_mask)
+                else:
+                    Id = np.diag(
+                        self.des_mask.astype(complex).flatten(order=self._flatten_order)
+                    )[:, self.des_mask.flatten(order=self._flatten_order)]
+                    self.G = (
+                        self.omega**2
+                        * np.linalg.solve(self.M.toarray(), Id)[
+                            self.des_mask.flatten(order=self._flatten_order), :
+                        ]
+                    )
 
     def get_chi_inf(self) -> ComplexArray:
         """Get the inferred susceptibility from the QCQP dual solution."""
@@ -331,12 +338,20 @@ class Photonics_TM_FDFD(Photonics_FDFD):
         assert self.chi is not None
 
         chigrid_dof, M_dof, es = self._get_dof_chigrid_M_es(dof)
-        obj = np.real(-np.vdot(es, self.A0 @ es) + 2 * np.vdot(self.s0, es) + self.c0)
+
+        x = es
+
+        obj = np.real(-np.vdot(x, self.A0 @ x) + 2 * np.vdot(self.s0, x) + self.c0)
 
         if len(grad) > 0:
             Nx, Ny = self.geometry.get_grid_size()
+
+            # dL/dx term for the quadratic objective
+            term_qcqp = self.s0 - self.A0 @ x
+
             adj_src: ComplexGrid = np.zeros((Nx, Ny), dtype=complex)
-            adj_src[self.des_mask] = np.conj(self.s0 - self.A0 @ es)
+            adj_src[self.des_mask] = np.conj(term_qcqp)
+
             adj_v: ComplexArray = spla.spsolve(M_dof, adj_src.flatten())[
                 self.des_mask.flatten()
             ]
@@ -378,23 +393,32 @@ class Photonics_TM_FDFD(Photonics_FDFD):
 
         chigrid_dof, M_dof, es = self._get_dof_chigrid_M_es(dof)
 
-        et = self.ei[self.des_mask] + es
-        p = chigrid_dof[self.des_mask] * et
+        des_mask_flat = self._get_des_mask_flat()
+        areas = self.geometry.get_pixel_areas()[des_mask_flat]
+        sqrtW = np.sqrt(areas)
 
-        obj = np.real(-np.vdot(p, self.A0 @ p) + 2 * np.vdot(self.s0, p) + self.c0)
+        et = self.ei[self.des_mask] + es
+
+        # In dense QCQP, the variable is x = sqrt(W) p = sqrt(W) chi_dof E_total
+        p_phys = chigrid_dof[self.des_mask] * et
+        x = sqrtW * p_phys
+
+        obj = np.real(-np.vdot(x, self.A0 @ x) + 2 * np.vdot(self.s0, x) + self.c0)
 
         if len(grad) > 0:
             Nx, Ny = self.geometry.get_grid_size()
+            term_qcqp = self.s0 - self.A0 @ x
+
             adj_src: ComplexGrid = np.zeros((Nx, Ny), dtype=complex)
-            adj_src[self.des_mask] = chigrid_dof[self.des_mask] * np.conj(
-                self.s0 - self.A0 @ p
+            adj_src[self.des_mask] = chigrid_dof[self.des_mask] * (
+                sqrtW * np.conj(term_qcqp)
             )
             adj_v: ComplexArray = spla.spsolve(M_dof, adj_src.flatten())[
                 self.des_mask.flatten()
             ]
             grad[:] = 2 * np.real(
                 (
-                    self.chi * np.conj(self.s0 - self.A0 @ p)
+                    self.chi * np.conj(term_qcqp) * sqrtW
                     + self.omega**2 * self.chi * adj_v
                 )
                 * et

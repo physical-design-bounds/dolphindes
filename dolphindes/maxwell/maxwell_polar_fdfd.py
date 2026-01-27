@@ -440,6 +440,14 @@ class TM_Polar_FDFD(Maxwell_Polar_FDFD):
 
         return sp.csc_array(GaaInv), M
 
+    def get_M(self, chigrid: ComplexGrid | None = None) -> sp.csr_array:
+        """Assemble the full Maxwell operator M."""
+        return (
+            self.M0 + self._get_diagM_from_chigrid(chigrid)
+            if chigrid is not None
+            else self.M0
+        )
+
 
 # ============================================================================
 # Plotting utilities
