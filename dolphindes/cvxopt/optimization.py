@@ -183,12 +183,18 @@ class _Optimizer:
         opt_val = np.inf
         grad_direction = dir @ grad
         while True:
-            tmp_value, _, _, _ = self.optfunc(
-                x0 + alpha * dir,
-                get_grad=False,
-                get_hess=False,
-                penalty_vectors=self.penalty_vector_list,
-            )
+            try:
+                tmp_value, _, _, _ = self.optfunc(
+                    x0 + alpha * dir,
+                    get_grad=False,
+                    get_hess=False,
+                    penalty_vectors=self.penalty_vector_list,
+                )
+            except np.linalg.LinAlgError:
+                # If matrix factorization fails despite feasible_func passing
+                # (numerical edge case), treat as effectively infeasible.
+                tmp_value = np.inf
+
             if self.verbose >= 3:
                 print("backtracking tmp_value", tmp_value)
             # the dual is still decreasing as we backtrack, continue
@@ -367,10 +373,10 @@ class BFGS(_Optimizer):
 
         # Skip update if gamma_dot_delta is too small
         # (avoid division by zero or numerical instability)
-        # if abs(gamma_dot_delta) < 1e-10:
-        #     if self.verbose >= 3:
-        #         print("Skipping Hinv update due to small gamma_dot_delta")
-        #     return Hinv
+        if abs(gamma_dot_delta) < 1e-10:
+            if self.verbose >= 3:
+                print("Skipping Hinv update due to small gamma_dot_delta")
+            return Hinv
 
         # Standard BFGS update formula
         rho = 1.0 / gamma_dot_delta
