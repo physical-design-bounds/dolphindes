@@ -6,7 +6,6 @@ dependencies:
   - python=3.10
   - numpy
   - scipy
-  - scipy-stubs
   - matplotlib
   - scikit-sparse
   - nlopt
