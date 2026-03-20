@@ -88,3 +88,15 @@ testpaths = ["tests"]
 markers = [
     "slow: long-running numerical tests",
 ]
+
+[project.urls]
+Homepage = "https://github.com/physical-design-bounds/dolphindes"
+Repository = "https://github.com/physical-design-bounds/dolphindes"
+Documentation = "https://dolphindes.readthedocs.io/"
+
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "License :: OSI Approved :: MIT License",
+    "Topic :: Scientific/Engineering :: Physics",
+]
