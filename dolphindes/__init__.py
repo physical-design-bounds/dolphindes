@@ -16,13 +16,13 @@ cvxopt
     Optimization problems and routines
 photonics
     Photonic dual optimization interface
+geometry
+    Geometry data classes
 maxwell
     Maxwell solver
 util
     Utilities
 """
-
-from . import cvxopt, geometry, maxwell, photonics, util
 
 __version__ = "0.1.0"
 

@@ -20,6 +20,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import scipy.sparse as sp
 import scipy.sparse.linalg as spla
+from matplotlib.axes import Axes
+from matplotlib.figure import Figure
 
 from dolphindes.geometry import PolarFDFDGeometry
 from dolphindes.types import (
@@ -485,8 +487,13 @@ def plot_real_polar_field(
     n_sectors: int = 1,
     use_log: bool = False,
     log_eps: float = 1e-12,
-) -> None:
-    """Plot a real-valued polar field."""
+) -> tuple[Figure, Axes]:
+    """Plot a real-valued polar field.
+
+    Returns ``(fig, ax)`` so callers can add titles or further customize.
+    The helper does not call ``plt.show()``; callers own final layout/show.
+    If *savename* is provided, the figure is saved and then closed.
+    """
     if len(phi_grid) == 1:
         # Handle 1D radial case by expanding to full circle for visualization
         field_mesh = _as_polar_mesh(field, phi_grid, r_grid)
@@ -501,14 +508,14 @@ def plot_real_polar_field(
     if use_log:
         norm = colors.LogNorm(vmin=max(log_eps, np.finfo(float).tiny))
 
-    plt.figure(figsize=figsize)
-    ax = plt.subplot(projection="polar")
-    p = plt.pcolormesh(phi_mesh, r_mesh, field_mesh, cmap=cmap, norm=norm)
+    fig = plt.figure(figsize=figsize)
+    ax = fig.add_subplot(projection="polar")
+    p = ax.pcolormesh(phi_mesh, r_mesh, field_mesh, cmap=cmap, norm=norm)
     if not np.allclose(2 * np.pi - phi_grid[-1], phi_grid[1] - phi_grid[0]):
-        plt.xlim([phi_grid[0], phi_grid[-1]])
+        ax.set_xlim((phi_grid[0], phi_grid[-1]))
 
     if colorbar:
-        plt.colorbar(p)
+        fig.colorbar(p, ax=ax)
 
     if show_sector_lines and n_sectors > 1:
         sector_angle = 2 * np.pi / n_sectors
@@ -518,13 +525,14 @@ def plot_real_polar_field(
             ax.plot([angle, angle], [0, r_max], "r-", linewidth=0.4, alpha=0.8)
 
     if not axes:
-        plt.axis("off")
-    plt.tight_layout()
+        ax.set_axis_off()
+
     if savename is not None:
-        plt.savefig(savename, dpi=dpi)
-        plt.close()
-    else:
-        plt.show()
+        fig.tight_layout()
+        fig.savefig(savename, dpi=dpi)
+        plt.close(fig)
+
+    return fig, ax
 
 
 def plot_cplx_polar_field(
