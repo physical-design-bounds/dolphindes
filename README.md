@@ -55,13 +55,18 @@ Additionally, if you use dolphindes to do Verlan design, you should cite the ini
 
 ```
 @article{chao_amaolo_blueprints_2025,
-      title={Bounds as blueprints: towards optimal and accelerated photonic inverse design}, 
-      author={Pengning Chao and Alessio Amaolo and Sean Molesky and Alejandro W. Rodriguez},
-      year={2025},
-      eprint={2504.10469},
-      archivePrefix={arXiv},
-      primaryClass={physics.optics},
-      url={https://arxiv.org/abs/2504.10469}, 
+      title = {Bounds as blueprints: towards optimal and accelerated photonic inverse design},
+      author = {Pengning Chao and Alessio Amaolo and Sean Molesky and Alejandro W. Rodriguez},
+      journal = {Opt. Express},
+      keywords = {Fourier transforms; Inverse design; Raman scattering; Ring resonators; Stochastic processes; Whispering gallery modes},
+      number = {5},
+      pages = {7337--7350},
+      publisher = {Optica Publishing Group},
+      volume = {34},
+      month = {Mar},
+      year = {2026},
+      url = {https://opg.optica.org/oe/abstract.cfm?URI=oe-34-5-7337},
+      doi = {10.1364/OE.585505},
 }
 
 @article{molesky_verlan_2025,
