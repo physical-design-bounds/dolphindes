@@ -53,7 +53,7 @@ class GCDHyperparameters:
     gcd_tol: float = 1e-2
 
 
-def merge_lead_constraints(QCQP: _SharedProjQCQP, merged_num: int = 2) -> None:
+def merge_lead_constraints(QCQP: _SharedProjQCQP, merged_num: int | float = 2) -> None:
     """
     Merge the first m shared projection constraints of QCQP into a single one.
 
@@ -63,8 +63,9 @@ def merge_lead_constraints(QCQP: _SharedProjQCQP, merged_num: int = 2) -> None:
     ----------
     QCQP : _SharedProjQCQP
         QCQP for which we merge the leading constraints.
-    merged_num : int (optional, default 2)
+    merged_num : int | float (optional, default 2)
         Number of leading constraints that we are merging together; must be at least 2.
+        If infinity, we merge all existing constraints together.
 
     Raises
     ------
@@ -74,11 +75,13 @@ def merge_lead_constraints(QCQP: _SharedProjQCQP, merged_num: int = 2) -> None:
     proj_cstrt_num = len(QCQP.Proj)
     if merged_num < 2:
         raise ValueError("Need at least 2 constraints for merging.")
-    if proj_cstrt_num < merged_num:
-        raise ValueError("Number of constraints insufficient for size of merge.")
-
     if QCQP.current_lags is None:
         raise ValueError("Cannot merge constraints: QCQP.current_lags is None.")
+
+    if np.isinf(merged_num):
+        merged_num = proj_cstrt_num
+    elif proj_cstrt_num < merged_num:
+        raise ValueError("Number of constraints insufficient for size of merge.")
 
     new_P = QCQP.Proj.Pstruct.astype(complex, copy=True)
     new_P.data[:] = 0.0
