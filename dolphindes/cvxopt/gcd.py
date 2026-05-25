@@ -83,6 +83,7 @@ def merge_lead_constraints(QCQP: _SharedProjQCQP, merged_num: int | float = 2) -
     elif proj_cstrt_num < merged_num:
         raise ValueError("Number of constraints insufficient for size of merge.")
 
+    assert isinstance(merged_num, int)
     new_P = QCQP.Proj.Pstruct.astype(complex, copy=True)
     new_P.data[:] = 0.0
     for i in range(merged_num):
