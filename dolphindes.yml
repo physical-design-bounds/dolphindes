@@ -7,7 +7,7 @@ dependencies:
   - numpy
   - scipy
   - matplotlib
-  - scikit-sparse
+  - scikit-sparse<0.5
   - nlopt
   - pandoc
   - pip:
