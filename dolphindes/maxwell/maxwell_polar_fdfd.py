@@ -10,10 +10,12 @@ boundary condition for frequency-domain Maxwell's equations solvers
 Shin and Fan 2012
 """
 
+from __future__ import annotations
+
 __all__ = ["Maxwell_Polar_FDFD", "TM_Polar_FDFD"]
 
 from abc import ABC
-from typing import cast
+from typing import TYPE_CHECKING, Callable, cast
 
 import matplotlib.colors as colors
 import matplotlib.pyplot as plt
@@ -31,6 +33,10 @@ from dolphindes.types import (
     FloatNDArray,
     IntNDArray,
 )
+
+if TYPE_CHECKING:
+    from jax.typing import ArrayLike
+    from jaxtyping import Array, Complex
 
 
 class Maxwell_Polar_FDFD(ABC):
@@ -88,6 +94,7 @@ class TM_Polar_FDFD(Maxwell_Polar_FDFD):
     ) -> None:
         super().__init__(omega, geometry)
         self.M0 = self._make_TM_Maxwell_Operator()
+        self._jax_field_fn: Callable[..., Complex[Array, " n"]] | None = None
 
     def _make_TM_Maxwell_Operator(self) -> sp.csr_array:
         """
@@ -259,6 +266,25 @@ class TM_Polar_FDFD(Maxwell_Polar_FDFD):
         """
         return -sp.diags_array(chigrid.flatten() * self.omega**2, format="dia")
 
+    def _assemble_M(self, chigrid: ComplexGrid | None = None) -> sp.csc_array:
+        """
+        Assemble the full TM Maxwell operator M = M0 + diagM(chigrid).
+
+        Parameters
+        ----------
+        chigrid : ComplexGrid, optional
+            Material susceptibility grid. The default None corresponds to vacuum
+            (M = M0).
+
+        Returns
+        -------
+        M : sp.csc_array
+            The system operator for the linear solve M @ Ez = 1j*omega*source.
+        """
+        if chigrid is None:
+            return sp.csc_array(self.M0)
+        return sp.csc_array(self.M0 + self._get_diagM_from_chigrid(chigrid))
+
     def get_TM_field(
         self, sourcegrid: ComplexGrid, chigrid: ComplexGrid | None = None
     ) -> ComplexArray:
@@ -277,14 +303,83 @@ class TM_Polar_FDFD(Maxwell_Polar_FDFD):
         Ez : ComplexArray
             Electric field solution (flattened).
         """
-        M = (
-            self.M0 + self._get_diagM_from_chigrid(chigrid)
-            if chigrid is not None
-            else self.M0
-        )
+        M = self._assemble_M(chigrid)
         RHS = 1j * self.omega * np.asarray(sourcegrid).flatten()
         Ez: ComplexArray = spla.spsolve(M, RHS)
         return Ez
+
+    def get_TM_field_jax(
+        self, sourcegrid: ArrayLike, chigrid: ArrayLike | None = None
+    ) -> Complex[Array, " n"]:
+        """
+        JAX-differentiable version of get_TM_field.
+
+        Solves M(chi) @ Ez = 1j*omega*source via jax.lax.custom_linear_solve so
+        that jax.grad / jax.jvp / jax.hessian work with respect to ``sourcegrid``
+        and ``chigrid``, enabling JAX-based inverse design that treats the solver
+        as a black box. The numpy solve still runs under the hood (no GPU).
+
+        Parameters
+        ----------
+        sourcegrid : array_like (complex)
+            Source distribution, shape (Nphi, Nr) or flattened.
+        chigrid : array_like (complex), optional
+            Material susceptibility. The default None corresponds to vacuum.
+
+        Returns
+        -------
+        Ez : jax.Array (complex)
+            Electric field solution (flattened, length Nphi * Nr).
+
+        Notes
+        -----
+        Requires 64-bit JAX: call ``jax.config.update("jax_enable_x64", True)``
+        before use.
+        """
+        import jax.numpy as jnp
+
+        from dolphindes.maxwell.jax_fdfd import build_jax_field_solver
+
+        field_fn = self._jax_field_fn
+        if field_fn is None:
+            field_fn = build_jax_field_solver(self)
+            self._jax_field_fn = field_fn
+        if chigrid is None:
+            n = self.geometry.Nphi * self.geometry.Nr
+            chigrid = jnp.zeros(n, dtype=jnp.complex128)
+        return field_fn(sourcegrid, chigrid)
+
+    def get_TM_dipole_field_jax(
+        self, ir: int, iphi: int, chigrid: ArrayLike | None = None
+    ) -> Complex[Array, " n"]:
+        """
+        JAX-differentiable version of get_TM_dipole_field.
+
+        Returns the field of a unit point dipole at grid location (ir, iphi),
+        differentiable with respect to ``chigrid`` (the dipole position is fixed).
+        See get_TM_field_jax for requirements.
+
+        Parameters
+        ----------
+        ir : int
+            Radial grid index.
+        iphi : int
+            Azimuthal grid index.
+        chigrid : array_like (complex), optional
+            Material susceptibility. The default None corresponds to vacuum.
+
+        Returns
+        -------
+        Ez : jax.Array (complex)
+            Electric field solution (flattened, length Nphi * Nr).
+        """
+        import jax.numpy as jnp
+
+        area = self.geometry.get_pixel_areas()
+        idx = iphi * self.geometry.Nr + ir
+        n = self.geometry.Nphi * self.geometry.Nr
+        sourcegrid = jnp.zeros(n, dtype=jnp.complex128).at[idx].set(1.0 / area[idx])
+        return self.get_TM_field_jax(sourcegrid, chigrid)
 
     def get_TM_dipole_field(
         self, ir: int, iphi: int, chigrid: ComplexGrid | None = None
