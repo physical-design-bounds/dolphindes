@@ -19,7 +19,7 @@ dependencies = [
     "scipy",
     "matplotlib",
     "nlopt",
-    "scikit-sparse",
+    "scikit-sparse<0.5",
 ]
 
 classifiers = [
