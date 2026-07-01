@@ -34,7 +34,6 @@ classifiers = [
 # JAX-differentiable Maxwell solves (get_TM_field_jax) for inverse design.
 jax = [
     "jax",
-    "optax",
 ]
 dev = [
     "pytest",
@@ -45,6 +44,7 @@ dev = [
     "ipykernel",
     "jax",
     "jaxtyping",
+    "optax",
     "nbstripout"
 ]
 docs = [
