@@ -9,13 +9,8 @@ operator and the ``1j * omega`` scaling of the source -- is expressed in native
 JAX. That split is what lets ``jax.lax.custom_linear_solve`` produce correct
 forward-, reverse-, and higher-order derivatives.
 
-The solver solves ``M(chi) @ Ez = 1j * omega * source`` with
-``M(chi) = M0 + diagM(chi)`` and ``diagM(chi) = -omega**2 * diag(chi)`` (see
-``Maxwell_FDFD._get_diagM_from_chigrid``). Both ``TM_FDFD`` and ``TM_Polar_FDFD``
-share this structure, so this builder works for either.
-
 64-bit precision is required: call ``jax.config.update("jax_enable_x64", True)``
-before using these functions, otherwise FDFD accuracy silently degrades.
+for exact correspondence with the scipy solver.
 """
 
 from __future__ import annotations
@@ -92,7 +87,7 @@ def build_jax_field_solver(
 
     # Per-pixel diagonal coefficient d such that diagM(chi) @ x == d * chi * x.
     # Derived from the solver's own operator so this tracks any change to
-    # _get_diagM_from_chigrid (physics convention M = M0 - omega**2 diag(chi)).
+    # _get_diagM_from_chigrid.
     diag_coeff = jnp.asarray(
         np.asarray(
             solver._get_diagM_from_chigrid(np.ones(n, dtype=complex)).diagonal(),
