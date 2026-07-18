@@ -9,6 +9,22 @@ operator and the ``1j * omega`` scaling of the source -- is expressed in native
 JAX. That split is what lets ``jax.lax.custom_linear_solve`` produce correct
 forward-, reverse-, and higher-order derivatives.
 
+This is a one-directional bridge: ``dolphindes.maxwell`` has no JAX dependency,
+and JAX enters only through this module (installed via the ``jax`` extra).
+
+Build the differentiable function once, outside any optimization loop, then
+differentiate it as usual::
+
+    import jax
+    jax.config.update("jax_enable_x64", True)
+
+    field = build_jax_field_solver(solver)          # setup cost paid once
+    grad_fn = jax.grad(lambda chi: loss(field(source_flat, chi)))
+
+``build_jax_field_solver`` copies the operator into a native-JAX sparse array, so
+calling it per iteration is wasteful. The returned function takes and
+returns flat arrays; reshape at the call site if the solver is 2D.
+
 64-bit precision is required: call ``jax.config.update("jax_enable_x64", True)``
 for exact correspondence with the scipy solver.
 """
@@ -43,6 +59,7 @@ class _FieldSolver(Protocol):
     M0: Any
 
     def _get_diagM_from_chigrid(self, chigrid: ComplexArray) -> sp.dia_array: ...
+    def _assemble_M(self, chigrid: ComplexArray | None = ...) -> sp.csc_array: ...
 
 
 def _require_x64() -> None:
@@ -62,16 +79,23 @@ def build_jax_field_solver(
     Parameters
     ----------
     solver : TM_FDFD or TM_Polar_FDFD
-        Solver instance. Its ``omega``, ``M0`` and ``_get_diagM_from_chigrid``
-        are captured; both are fixed after construction, so the returned function
-        may be cached on the solver.
+        Solver instance. Its ``omega`` and ``M0`` are captured at build time, so
+        the returned function will not see later mutations of either; rebuild if
+        you change them.
 
     Returns
     -------
     field : callable
         ``field(source_flat, chi_flat) -> Ez_flat``, a flat complex field that is
-        differentiable with respect to both ``source_flat`` and ``chi_flat``. 
-        Inputs are flattened and cast to complex128 internally.
+        differentiable with respect to both ``source_flat`` and ``chi_flat``.
+        Inputs are flattened and cast to complex128 internally. Pass a zero
+        ``chi_flat`` for a vacuum solve.
+
+    Notes
+    -----
+    Building is not free (it copies the operator into a native-JAX sparse array),
+    so call this once and reuse the returned function rather than rebuilding it
+    inside an optimization loop.
     """
     _require_x64()
 
@@ -103,8 +127,7 @@ def build_jax_field_solver(
 
     def _assemble_csc(chi_np: ArrayLike, transpose: bool) -> sp.csc_array:
         """Assemble the scipy operator M(chi) (or its transpose) for a solve."""
-        diag = solver._get_diagM_from_chigrid(np.asarray(chi_np))
-        m = sp.csc_array(M0 + diag)
+        m = solver._assemble_M(np.asarray(chi_np))
         return sp.csc_array(m.T) if transpose else m
 
     def make_solve(

@@ -9,22 +9,15 @@ calculations require a single solve for the initial source (if not known) and
 one for the Green's function.
 """
 
-from __future__ import annotations
-
 __all__ = ["TM_FDFD"]
 
 from abc import ABC
-from typing import TYPE_CHECKING, Callable
 
 import numpy as np
 import scipy.sparse as sp
 
 from dolphindes.geometry import CartesianFDFDGeometry
 from dolphindes.types import BoolGrid, ComplexGrid
-
-if TYPE_CHECKING:
-    from jax.typing import ArrayLike
-    from jaxtyping import Array, Complex
 
 
 class Maxwell_FDFD(ABC):
@@ -116,7 +109,6 @@ class TM_FDFD(Maxwell_FDFD):
         self.M0 = self._make_TM_Maxwell_Operator(
             self.Nx, self.Ny, self.Npmlx, self.Npmly
         )
-        self._jax_field_fn: Callable[..., Complex[Array, " n"]] | None = None
 
     def _make_TM_Maxwell_Operator(
         self, Nx: int, Ny: int, Npmlx: int, Npmly: int
@@ -412,78 +404,6 @@ class TM_FDFD(Maxwell_FDFD):
         RHS = 1j * self.omega * sourcegrid.flatten()
         Ez: ComplexGrid = np.reshape(sp.linalg.spsolve(M, RHS), (self.Nx, self.Ny))
         return Ez
-
-    def get_TM_field_jax(
-        self, sourcegrid: ArrayLike, chigrid: ArrayLike | None = None
-    ) -> Complex[Array, " nx ny"]:
-        """
-        JAX-differentiable version of get_TM_field.
-
-        Solves M(chi) @ Ez = 1j*omega*source via jax.lax.custom_linear_solve so
-        that jax.grad / jax.jvp / jax.hessian work with respect to ``sourcegrid``
-        and ``chigrid``, enabling JAX-based inverse design that treats the solver
-        as a black box. The numpy solve still runs under the hood (no GPU).
-
-        Parameters
-        ----------
-        sourcegrid : array_like (dtype complex)
-            Spatial distribution of the source, shape (Nx, Ny) or flattened.
-        chigrid : array_like (dtype complex), optional
-            Spatial distribution of material susceptibility. The default None
-            corresponds to vacuum.
-
-        Returns
-        -------
-        Ez : jax.Array (dtype complex)
-            Field of the source, shape (Nx, Ny).
-
-        Notes
-        -----
-        Requires 64-bit JAX: call ``jax.config.update("jax_enable_x64", True)``
-        before use.
-        """
-        import jax.numpy as jnp
-
-        from dolphindes.maxwell.jax_fdfd import build_jax_field_solver
-
-        field_fn = self._jax_field_fn
-        if field_fn is None:
-            field_fn = build_jax_field_solver(self)
-            self._jax_field_fn = field_fn
-        if chigrid is None:
-            chigrid = jnp.zeros(self.Nx * self.Ny, dtype=jnp.complex128)
-        Ez = field_fn(sourcegrid, chigrid)
-        return Ez.reshape(self.Nx, self.Ny)
-
-    def get_TM_dipole_field_jax(
-        self, cx: int, cy: int, chigrid: ArrayLike | None = None
-    ) -> Complex[Array, " nx ny"]:
-        """
-        JAX-differentiable version of get_TM_dipole_field.
-
-        Returns the field of a unit TM dipole at (cx, cy), differentiable with
-        respect to ``chigrid`` (the dipole position is fixed). See
-        get_TM_field_jax for requirements.
-
-        Parameters
-        ----------
-        cx : int
-            x-coordinate of the dipole source.
-        cy : int
-            y-coordinate of the dipole source.
-        chigrid : array_like (dtype complex), optional
-            Material susceptibility. The default None corresponds to vacuum.
-
-        Returns
-        -------
-        Ez : jax.Array (dtype complex)
-            Field of the dipole source, shape (Nx, Ny).
-        """
-        import jax.numpy as jnp
-
-        sourcegrid = jnp.zeros((self.Nx, self.Ny), dtype=jnp.complex128)
-        sourcegrid = sourcegrid.at[cx, cy].set(1.0 / (self.dx * self.dy))
-        return self.get_TM_field_jax(sourcegrid, chigrid)
 
     def get_TM_Gba(self, A_mask: BoolGrid, B_mask: BoolGrid) -> ComplexGrid:
         """
