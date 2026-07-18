@@ -29,3 +29,4 @@ Here is a collection of notebooks demonstrating the capabilities of Dolphindes.
    Using mirror symmetry in the polar solver <examples/solvers/polar_FDFD_mirror_symmetry>
    Using rotational symmetry in the polar solver <examples/solvers/polar_FDFD_rotational_symmetry>
    Custom Maxwell Solver <examples/solvers/custom_maxwell_solver>
+   Differentiating Maxwell Solver <examples/solvers/jax_inverse_design_absorption>
