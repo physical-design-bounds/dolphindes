@@ -25,7 +25,6 @@ class TestArrayValidators:
             validate_bool_mask([[True, False]], "mask")
 
     def test_validate_bool_mask_rejects_float_dtype(self):
-        # The exact failure mode described in issue #28.
         mask = np.zeros((3, 4), dtype=float)
         with pytest.raises(ValueError, match="boolean dtype"):
             validate_bool_mask(mask, "mask")
