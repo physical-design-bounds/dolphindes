@@ -513,11 +513,7 @@ class TM_FDFD(Maxwell_FDFD):
             The full Maxwell operator used in the computation.
         """
         # assemble full Maxwell operator (with materials if given)
-        M = (
-            self.M0
-            if chigrid is None
-            else self.M0 + self._get_diagM_from_chigrid(chigrid)
-        )
+        M = self._assemble_M(chigrid)
 
         # flatten masks and get index lists for design (A) and background (B)
         flat_A_mask = A_mask.flatten()

@@ -413,7 +413,7 @@ class TM_Polar_FDFD(Maxwell_Polar_FDFD):
 
     def get_GaaInv(
         self, A_mask: BoolGrid, chigrid: ComplexGrid | None = None
-    ) -> tuple[sp.csc_array, sp.csr_array]:
+    ) -> tuple[sp.csc_array, sp.csc_array]:
         """
         Compute the inverse Green's function on region A, G_{AA}^{-1}.
 
@@ -432,14 +432,10 @@ class TM_Polar_FDFD(Maxwell_Polar_FDFD):
         -------
         GaaInv : sp.csc_array
             Inverse Green's function on region A.
-        M : sp.csr_array
+        M : sp.csc_array
             Full Maxwell operator used.
         """
-        M = (
-            self.M0
-            if chigrid is None
-            else self.M0 + self._get_diagM_from_chigrid(chigrid)
-        )
+        M = self._assemble_M(chigrid)
 
         flat_A_mask = A_mask.flatten(order="F")
         designInd = np.nonzero(flat_A_mask)[0]
