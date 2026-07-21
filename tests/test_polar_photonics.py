@@ -131,6 +131,63 @@ class TestPhotonicsTMFDFDPolar:
         assert problem.QCQP is not None
         assert problem.Ndes == setup["Ndes"]
 
+    def test_setup_qcqp_local_dense(self):
+        """Test dense QCQP setup with local one-hot projectors."""
+        wavelength = 1.0
+        omega = 2 * np.pi / wavelength
+        chi = 3 + 1e-2j
+
+        dr = 0.25
+        Nr = 8
+        Nphi = 4
+        Npml = 1
+        n_sectors = 1
+
+        geometry = PolarFDFDGeometry(
+            Nphi=Nphi,
+            Nr=Nr,
+            Npml=Npml,
+            dr=dr,
+            n_sectors=n_sectors,
+            bloch_phase=0.0,
+        )
+
+        des_mask = np.zeros((Nr, Nphi), dtype=bool)
+        des_mask[2:4, :] = True
+        Ndes = int(np.sum(des_mask))
+
+        r_grid = (np.arange(Nr) + 0.5) * dr
+        area_r = r_grid * dr * (2 * np.pi / n_sectors / Nphi)
+        area_vec = np.kron(np.ones(Nphi), area_r)
+
+        ji = np.zeros(Nr * Nphi, dtype=complex)
+        ji[1] = 1.0 / area_vec[1]
+
+        problem = Photonics_TM_FDFD(
+            omega=omega,
+            geometry=geometry,
+            chi=chi,
+            des_mask=des_mask,
+            ji=ji,
+            sparseQCQP=False,
+        )
+        problem.get_ei(ji, update=True)
+        problem.set_objective(
+            A0=sp.csc_array((Ndes, Ndes), dtype=complex),
+            s0=np.zeros(Ndes, dtype=complex),
+            c0=0.0,
+            denseToSparse=False,
+        )
+        problem.setup_QCQP(Pdiags="local")
+
+        assert problem.QCQP is not None
+        assert problem.Plist is not None
+        assert problem.QCQP.n_proj_constr == 2 * Ndes
+        assert len(problem.Plist) == 2 * Ndes
+        assert problem.QCQP.Proj.Pdiags.shape == (Ndes, 2 * Ndes)
+        assert np.allclose(problem.QCQP.Proj.Pdiags[:, :Ndes], np.eye(Ndes))
+        assert np.allclose(problem.QCQP.Proj.Pdiags[:, Ndes:], -1j * np.eye(Ndes))
+
     def test_bound_qcqp(self, absorption_problem_setup):
         """Test that QCQP bound can be computed."""
         setup = absorption_problem_setup

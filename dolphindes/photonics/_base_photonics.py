@@ -244,6 +244,35 @@ class Photonics_FDFD(ABC):
         if c0 is not None:
             self.c0 = c0
 
+    def _build_projector_list(
+        self, n_des: int, Pdiags: str, phase: float | None = None
+    ) -> list[sp.csc_array]:
+        """Build the projector list for the requested shared-constraint basis."""
+        Id = sp.eye_array(n_des, dtype=complex, format="csc")
+
+        if Pdiags == "global":
+            return [Id, (-1j) * Id]
+
+        if Pdiags == "local":
+            local_one_hot_projectors = [
+                sp.csc_array(
+                    ([1.0], ([idx], [idx])),
+                    shape=(n_des, n_des),
+                    dtype=complex,
+                )
+                for idx in range(n_des)
+            ]
+            return local_one_hot_projectors + [
+                (-1j) * projector for projector in local_one_hot_projectors
+            ]
+
+        if Pdiags == "phase":
+            if phase is None:
+                raise ValueError("phase argument must be specified for Pdiags='phase'")
+            return [np.exp(1j * phase) * Id]
+
+        raise ValueError("Not a valid Pdiags specification / needs implementation")
+
     def setup_QCQP(
         self, Pdiags: str = "global", verbose: float = 0, phase: float | None = None
     ) -> None:
@@ -253,8 +282,9 @@ class Photonics_FDFD(ABC):
         Parameters
         ----------
         Pdiags : str or ndarray, optional
-            Specification for projection matrix diagonals. If "global", creates
-            global projectors with ones and -1j entries. Default: "global"
+            Specification for projection matrix diagonals. "global" creates
+            [I, -1j I], "local" creates [E_i, -1j E_i] one-hot projectors,
+            and "phase" creates [exp(1j * phase) I]. Default: "global"
         verbose : float, optional
             Verbosity level for debugging output. Default: 0
 
@@ -288,16 +318,7 @@ class Photonics_FDFD(ABC):
 
         self.get_ei(self.ji, update=True)
 
-        if Pdiags == "global":
-            Id = sp.eye_array(self.Ndes, dtype=complex, format="csc")
-            self.Plist = [Id, (-1j) * Id]
-        elif Pdiags == "phase":
-            if phase is None:
-                raise ValueError("phase argument must be specified for Pdiags='phase'")
-            Id = sp.eye_array(self.Ndes, dtype=complex, format="csc")
-            self.Plist = [np.exp(1j * phase) * Id]
-        else:
-            raise ValueError("Not a valid Pdiags specification / needs implementation")
+        self.Plist = self._build_projector_list(self.Ndes, Pdiags, phase)
 
         assert self.chi is not None
         assert self.ei is not None

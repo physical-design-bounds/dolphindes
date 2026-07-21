@@ -12,6 +12,7 @@ Here is a collection of notebooks demonstrating the capabilities of Dolphindes.
    GCD Method <examples/limits/LDOS_gcd>
    Planewave Absorption <examples/limits/planewave_absorption>
    Polar Coordinates <examples/limits/LDOS_polar>
+   Polar Coordinates with Lossless Materials <examples/limits/LDOS_polar_lossless>
 
 .. toctree::
    :maxdepth: 1
