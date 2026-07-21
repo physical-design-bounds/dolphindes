@@ -32,6 +32,7 @@ from dolphindes.types import (
     FloatNDArray,
 )
 from dolphindes.util import check_attributes
+from dolphindes.util.validation import validate_bool_mask, validate_numeric_array
 
 from ._base_photonics import Photonics_FDFD
 
@@ -101,6 +102,21 @@ class Photonics_TM_FDFD(Photonics_FDFD):
         c0 : float, optional
             Objective constant. Default: 0.0
         """
+        # validate array inputs
+        if geometry is not None:
+            grid_shape = geometry.get_grid_size()
+            n_grid = int(np.prod(grid_shape))
+            if des_mask is not None:
+                validate_bool_mask(des_mask, "des_mask", shape=grid_shape)
+            if ji is not None:
+                validate_numeric_array(ji, "ji", size=n_grid)
+            if ei is not None:
+                validate_numeric_array(ei, "ei", size=n_grid)
+            if chi_background is not None:
+                validate_numeric_array(
+                    chi_background, "chi_background", size=n_grid
+                )
+
         self.des_mask = des_mask
         self.Ginv: Optional[sp.csc_array] = None
         self.G: Optional[ComplexArray] = None

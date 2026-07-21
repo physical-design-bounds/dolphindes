@@ -18,6 +18,7 @@ import scipy.sparse as sp
 
 from dolphindes.geometry import CartesianFDFDGeometry
 from dolphindes.types import BoolGrid, ComplexGrid
+from dolphindes.util.validation import validate_bool_mask, validate_numeric_array
 
 
 class Maxwell_FDFD(ABC):
@@ -431,8 +432,8 @@ class TM_FDFD(Maxwell_FDFD):
             due to a unit dipole at a location in A_mask.
         """
         # validate masks against the full grid
-        assert A_mask.shape == (self.Nx, self.Ny)
-        assert B_mask.shape == (self.Nx, self.Ny)
+        validate_bool_mask(A_mask, "A_mask", shape=(self.Nx, self.Ny))
+        validate_bool_mask(B_mask, "B_mask", shape=(self.Nx, self.Ny))
 
         # restrict masks to the non-PML interior
         A_mask_s = A_mask[
@@ -512,6 +513,11 @@ class TM_FDFD(Maxwell_FDFD):
         M : sp.csc_array
             The full Maxwell operator used in the computation.
         """
+        # validate user inputs against the full grid
+        validate_bool_mask(A_mask, "A_mask", shape=(self.Nx, self.Ny))
+        if chigrid is not None:
+            validate_numeric_array(chigrid, "chigrid", size=self.Nx * self.Ny)
+
         # assemble full Maxwell operator (with materials if given)
         M = self._assemble_M(chigrid)
 

@@ -110,9 +110,10 @@ class _SharedProjQCQP(ABC):
         # A2 may be sparse even if using dense formulation
         all_sparse = np.all(all_mat_sp)
         all_dense = not np.any(all_mat_sp)
-        assert all_sparse or all_dense, (
-            "All quadratic matrices must be either sparse or dense."
-        )
+        if not (all_sparse or all_dense):
+            raise ValueError(
+                "All quadratic matrices must be either sparse or dense."
+            )
 
         if all_sparse:
             self.A0 = sp.csc_array(A0)
