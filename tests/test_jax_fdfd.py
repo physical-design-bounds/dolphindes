@@ -19,6 +19,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
+import scipy.sparse.linalg as spla
 
 from dolphindes.geometry import CartesianFDFDGeometry, PolarFDFDGeometry
 from dolphindes.maxwell import TM_FDFD, TM_Polar_FDFD
@@ -257,3 +258,64 @@ def test_accepts_unflattened_input():
     flat = np.asarray(c.field(c.source, c.chi))
     grid = np.asarray(c.field(c.source.reshape(10, 8), c.chi.reshape(10, 8)))
     assert np.allclose(flat, grid, atol=1e-12)
+
+
+def test_jit_matches_eager(case):
+    """jit(field) and jit(grad(loss)) reproduce their eager counterparts.
+
+    The solve runs inside a jax.pure_callback, so this guards that the bridge
+    stays correct under jit (the intended usage in an optimization loop).
+    """
+    s_j, c_j = jnp.asarray(case.source), jnp.asarray(case.chi)
+
+    f_eager = np.asarray(case.field(s_j, c_j))
+    f_jit = np.asarray(jax.jit(case.field)(s_j, c_j))
+    assert np.allclose(f_eager, f_jit, atol=1e-10)
+
+    tgt = jnp.asarray(case.target)
+
+    def loss(c):
+        return jnp.real(jnp.vdot(tgt, case.field(s_j, c).ravel()))
+
+    g_eager = np.asarray(jax.grad(loss)(c_j))
+    g_jit = np.asarray(jax.jit(jax.grad(loss))(c_j))
+    assert np.allclose(g_eager, g_jit, atol=1e-10)
+
+
+def test_repeated_calls_distinct_chi(case):
+    """Successive solves at distinct chi each match numpy.
+
+    Guards the LU cache keying: a stale factorization would make a later chi
+    silently reuse an earlier operator.
+    """
+    rng = np.random.default_rng(11)
+    for _ in range(3):
+        chi = rng.standard_normal(case.n) + 1j * rng.standard_normal(case.n)
+        ez_np = np.asarray(case.sim.get_TM_field(case.source, chi)).ravel()
+        ez_jx = np.asarray(case.field(case.source, chi))
+        assert np.allclose(ez_np, ez_jx, atol=1e-10)
+
+
+def test_factorization_reused_between_forward_and_adjoint(small_case, monkeypatch):
+    """One value_and_grad factorizes M once; the adjoint reuses it via trans='T'.
+
+    Directly checks the performance intent of the LU cache rather than just the
+    numerical result.
+    """
+    c = small_case  # function-scoped fixture -> the field's LU cache is empty
+    tgt, s_j = jnp.asarray(c.target), jnp.asarray(c.source)
+
+    calls = {"n": 0}
+    real_splu = spla.splu
+
+    def counting_splu(*a, **k):
+        calls["n"] += 1
+        return real_splu(*a, **k)
+
+    monkeypatch.setattr(spla, "splu", counting_splu)
+
+    def loss(chi):
+        return jnp.real(jnp.vdot(tgt, c.field(s_j, chi).ravel()))
+
+    jax.value_and_grad(loss)(jnp.asarray(c.chi))
+    assert calls["n"] == 1

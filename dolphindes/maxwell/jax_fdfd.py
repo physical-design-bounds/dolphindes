@@ -31,6 +31,7 @@ for exact correspondence with the scipy solver.
 
 from __future__ import annotations
 
+from collections import OrderedDict
 from typing import TYPE_CHECKING, Any, Callable, Protocol
 
 import jax
@@ -125,20 +126,41 @@ def build_jax_field_solver(
         """Apply M(chi) to x, fully in native JAX."""
         return M0_bcoo @ x + diag_coeff * chi * x
 
-    def _assemble_csc(chi_np: ArrayLike, transpose: bool) -> sp.csc_array:
-        """Assemble the scipy operator M(chi) (or its transpose) for a solve."""
-        m = solver._assemble_M(np.asarray(chi_np))
-        return sp.csc_array(m.T) if transpose else m
+    # LU cache so the forward solve and its adjoint (transpose) solve share a
+    # single factorization: scipy's SuperLU.solve(..., trans="T") reuses the
+    # factors of M for M^T, so a value-and-grad step factorizes M once rather
+    # than twice (and jax.hessian, many solves at the same chi, factorizes once
+    # rather than O(n) times). Keyed on chi bytes -- M0 is fixed at build time,
+    # so chi determines M -- and capped, since chi changes every optimization
+    # step. Assumes callbacks are not invoked concurrently.
+    lu_cache: OrderedDict[bytes, Any] = OrderedDict()
+    lu_cache_max = 8
+
+    def _get_lu(chi_np: ArrayLike) -> Any:
+        """Factorize M(chi) once and memoize it, keyed on the chi bytes."""
+        chi_arr = np.asarray(chi_np, dtype=np.complex128)
+        key = chi_arr.tobytes()
+        lu = lu_cache.get(key)
+        if lu is None:
+            lu = spla.splu(sp.csc_matrix(solver._assemble_M(chi_arr)))
+            lu_cache[key] = lu
+            if len(lu_cache) > lu_cache_max:
+                lu_cache.popitem(last=False)
+        else:
+            lu_cache.move_to_end(key)
+        return lu
 
     def make_solve(
         chi: Complex[Array, " n"], transpose: bool
     ) -> Callable[[Any, Complex[Array, " n"]], Complex[Array, " n"]]:
         """Return a custom_linear_solve-compatible solver closing over ``chi``.
 
-        ``transpose`` selects the plain transpose M^T, which is the adjoint that
-        JAX's reverse mode expects for this complex-linear operator (verified
-        against jnp.linalg.solve to machine precision).
+        ``transpose`` selects the plain transpose M^T (scipy ``trans="T"``),
+        which is the adjoint JAX's reverse mode expects for this complex-linear
+        operator (verified against jnp.linalg.solve to machine precision). Both
+        directions reuse the cached LU factorization of M.
         """
+        trans = "T" if transpose else "N"
 
         def _solve(
             _unused_matvec: Any, b: Complex[Array, " n"]
@@ -146,8 +168,8 @@ def build_jax_field_solver(
             def _callback(
                 chi_in: Complex[Array, " n"], rhs: Complex[Array, " n"]
             ) -> ComplexArray:
-                m = _assemble_csc(chi_in, transpose)
-                x = spla.spsolve(m, np.asarray(rhs))
+                lu = _get_lu(chi_in)
+                x = lu.solve(np.asarray(rhs, dtype=np.complex128), trans=trans)
                 return np.asarray(x, dtype=np.complex128)
 
             return jax.pure_callback(
