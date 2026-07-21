@@ -31,7 +31,7 @@ classifiers = [
 
 # This section defines optional sets of dependencies, e.g., for development or building docs.
 [project.optional-dependencies]
-# JAX-differentiable Maxwell solves (get_TM_field_jax) for inverse design.
+# JAX-differentiable Maxwell solves (build_jax_field_solver) for inverse design.
 jax = [
     # vmap_method for pure_callback (used by the JAX bridge) requires >= 0.4.35.
     "jax>=0.4.35",
