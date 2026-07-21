@@ -31,6 +31,7 @@ from dolphindes.types import (
     FloatNDArray,
     IntNDArray,
 )
+from dolphindes.util.validation import validate_bool_mask, validate_numeric_array
 
 
 class Maxwell_Polar_FDFD(ABC):
@@ -377,6 +378,9 @@ class TM_Polar_FDFD(Maxwell_Polar_FDFD):
         G_ba : ComplexArray
             Green's function matrix (N_obs x N_design).
         """
+        n_grid = self.geometry.Nr * self.geometry.Nphi
+        validate_bool_mask(design_mask, "design_mask", size=n_grid)
+        validate_bool_mask(observe_mask, "observe_mask", size=n_grid)
 
         def to_sector_lin_idx(mask: BoolGrid) -> IntNDArray:
             if mask.shape == (self.geometry.Nr, self.geometry.Nphi):
@@ -435,6 +439,11 @@ class TM_Polar_FDFD(Maxwell_Polar_FDFD):
         M : sp.csc_array
             Full Maxwell operator used.
         """
+        n_grid = self.geometry.Nr * self.geometry.Nphi
+        validate_bool_mask(A_mask, "A_mask", size=n_grid)
+        if chigrid is not None:
+            validate_numeric_array(chigrid, "chigrid", size=n_grid)
+
         M = self._assemble_M(chigrid)
 
         flat_A_mask = A_mask.flatten(order="F")

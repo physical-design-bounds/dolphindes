@@ -74,6 +74,28 @@ class CartesianFDFDGeometry(GeometryHyperparameters):
     bloch_x: float = 0.0
     bloch_y: float = 0.0
 
+    def __post_init__(self) -> None:
+        """Validate grid dimensions and spacings."""
+        if self.Nx <= 0 or self.Ny <= 0:
+            raise ValueError(
+                f"Nx and Ny must be positive, got Nx={self.Nx}, Ny={self.Ny}."
+            )
+        if self.Npmlx < 0 or self.Npmly < 0:
+            raise ValueError(
+                f"Npmlx and Npmly must be non-negative, got "
+                f"Npmlx={self.Npmlx}, Npmly={self.Npmly}."
+            )
+        if self.dx <= 0 or self.dy <= 0:
+            raise ValueError(
+                f"dx and dy must be positive, got dx={self.dx}, dy={self.dy}."
+            )
+        if 2 * self.Npmlx >= self.Nx or 2 * self.Npmly >= self.Ny:
+            raise ValueError(
+                "PML regions must fit inside the grid: need 2*Npmlx < Nx and "
+                f"2*Npmly < Ny, got Npmlx={self.Npmlx}, Nx={self.Nx}, "
+                f"Npmly={self.Npmly}, Ny={self.Ny}."
+            )
+
     def get_grid_size(self) -> Tuple[int, int]:
         """
         Return grid dimensions.
@@ -146,6 +168,34 @@ class PolarFDFDGeometry(GeometryHyperparameters):
     bloch_phase: float = 0.0
     m: int = 3
     lnR: float = -20.0
+
+    def __post_init__(self) -> None:
+        """Validate grid dimensions and spacings."""
+        if self.Nphi <= 0 or self.Nr <= 0:
+            raise ValueError(
+                f"Nphi and Nr must be positive, got Nphi={self.Nphi}, Nr={self.Nr}."
+            )
+        if self.Npml < 0 or self.Npml_inner < 0:
+            raise ValueError(
+                f"Npml and Npml_inner must be non-negative, got "
+                f"Npml={self.Npml}, Npml_inner={self.Npml_inner}."
+            )
+        if self.dr <= 0:
+            raise ValueError(f"dr must be positive, got dr={self.dr}.")
+        if self.r_inner < 0:
+            raise ValueError(
+                f"r_inner must be non-negative, got r_inner={self.r_inner}."
+            )
+        if self.n_sectors <= 0:
+            raise ValueError(
+                f"n_sectors must be positive, got n_sectors={self.n_sectors}."
+            )
+        if self.Npml + self.Npml_inner >= self.Nr:
+            raise ValueError(
+                "PML regions must fit inside the radial grid: need "
+                f"Npml + Npml_inner < Nr, got Npml={self.Npml}, "
+                f"Npml_inner={self.Npml_inner}, Nr={self.Nr}."
+            )
 
     @property
     def r_grid(self) -> FloatNDArray:
