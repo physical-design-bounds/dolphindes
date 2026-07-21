@@ -157,8 +157,7 @@ def build_jax_field_solver(
 
         ``transpose`` selects the plain transpose M^T (scipy ``trans="T"``),
         which is the adjoint JAX's reverse mode expects for this complex-linear
-        operator (verified against jnp.linalg.solve to machine precision). Both
-        directions reuse the cached LU factorization of M.
+        operator. Both directions reuse the cached LU factorization of M.
         """
         trans = "T" if transpose else "N"
 

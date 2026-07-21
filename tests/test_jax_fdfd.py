@@ -319,3 +319,40 @@ def test_factorization_reused_between_forward_and_adjoint(small_case, monkeypatc
 
     jax.value_and_grad(loss)(jnp.asarray(c.chi))
     assert calls["n"] == 1
+
+
+def test_lu_cache_evicts_least_recently_used(small_case, monkeypatch):
+    """Filling past the cache cap evicts the oldest chi, keeping the rest.
+
+    Overflowing the cap (8) by one must drop exactly the least-recently-used
+    entry: a still-cached chi is reused (no refactorization) while the evicted
+    one is factorized again.
+    """
+    c = small_case  # function-scoped fixture -> the field's LU cache is empty
+    cap = 8  # build_jax_field_solver's lu_cache_max
+    rng = np.random.default_rng(23)
+    chis = [
+        rng.standard_normal(c.n) + 1j * rng.standard_normal(c.n) for _ in range(cap + 1)
+    ]
+
+    # One forward solve per distinct chi factorizes once; inserting the (cap+1)th
+    # evicts chis[0], leaving chis[1..cap] cached (chis[cap] most recent).
+    for chi in chis:
+        np.asarray(c.field(jnp.asarray(c.source), jnp.asarray(chi)))
+
+    real_splu = spla.splu
+    calls = {"n": 0}
+
+    def counting_splu(*a, **k):
+        calls["n"] += 1
+        return real_splu(*a, **k)
+
+    monkeypatch.setattr(spla, "splu", counting_splu)
+
+    # Still cached -> reused, no new factorization.
+    np.asarray(c.field(jnp.asarray(c.source), jnp.asarray(chis[cap])))
+    assert calls["n"] == 0
+
+    # Evicted -> must factorize again.
+    np.asarray(c.field(jnp.asarray(c.source), jnp.asarray(chis[0])))
+    assert calls["n"] == 1
