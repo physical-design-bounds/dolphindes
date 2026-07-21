@@ -336,6 +336,25 @@ class TM_FDFD(Maxwell_FDFD):
         """
         return -sp.diags_array(chigrid.flatten() * self.omega**2, format="dia")
 
+    def _assemble_M(self, chigrid: ComplexGrid | None = None) -> sp.csc_array:
+        """
+        Assemble the full TM Maxwell operator M = M0 + diagM(chigrid).
+
+        Parameters
+        ----------
+        chigrid : np.ndarray (dtype complex), optional
+            Material susceptibility grid. The default None corresponds to vacuum
+            (M = M0).
+
+        Returns
+        -------
+        M : sp.csc_array
+            The system operator for the linear solve M @ Ez = 1j*omega*source.
+        """
+        if chigrid is None:
+            return self.M0
+        return sp.csc_array(self.M0 + self._get_diagM_from_chigrid(chigrid))
+
     def get_TM_dipole_field(
         self, cx: int, cy: int, chigrid: ComplexGrid | None = None
     ) -> ComplexGrid:
@@ -381,11 +400,7 @@ class TM_FDFD(Maxwell_FDFD):
             Field of the dipole source.
 
         """
-        M = (
-            self.M0 + self._get_diagM_from_chigrid(chigrid)
-            if chigrid is not None
-            else self.M0
-        )
+        M = self._assemble_M(chigrid)
         RHS = 1j * self.omega * sourcegrid.flatten()
         Ez: ComplexGrid = np.reshape(sp.linalg.spsolve(M, RHS), (self.Nx, self.Ny))
         return Ez
@@ -498,11 +513,7 @@ class TM_FDFD(Maxwell_FDFD):
             The full Maxwell operator used in the computation.
         """
         # assemble full Maxwell operator (with materials if given)
-        M = (
-            self.M0
-            if chigrid is None
-            else self.M0 + self._get_diagM_from_chigrid(chigrid)
-        )
+        M = self._assemble_M(chigrid)
 
         # flatten masks and get index lists for design (A) and background (B)
         flat_A_mask = A_mask.flatten()

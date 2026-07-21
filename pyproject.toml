@@ -31,6 +31,9 @@ classifiers = [
 
 # This section defines optional sets of dependencies, e.g., for development or building docs.
 [project.optional-dependencies]
+jax = [
+    "jax>=0.4.35",
+]
 dev = [
     "pytest",
     "pytest-dependency",
@@ -38,6 +41,10 @@ dev = [
     "ruff",
     "mypy",
     "ipykernel",
+    "jax>=0.4.35",
+    "jaxtyping",
+    "optax",
+    "nbstripout"
 ]
 docs = [
     "sphinx",
@@ -60,6 +67,10 @@ extend-exclude = ["*.ipynb", "build", "dist"]
 [tool.ruff.lint]
 # Enable general linting + docstring checks
 select = ["E", "F", "I", "D"]
+# jaxtyping shape annotations such as Complex[Array, " n"] contain string shape
+# specs that pyflakes parses as forward references; F722 would flag them as
+# syntax errors. The shape names live inside the string, so F821 is unaffected.
+ignore = ["F722"]
 # Enforce NumPy-style docstrings
 pydocstyle.convention = "numpy"
 
@@ -86,6 +97,13 @@ exclude = ["build", "docs"]
 [[tool.mypy.overrides]]
 module = ["tests.*"]
 ignore_errors = true
+
+# The JAX bridge calls into JAX, which is only partially typed; relax untyped-call
+# and Any-return strictness there (our own signatures stay fully annotated).
+[[tool.mypy.overrides]]
+module = ["dolphindes.maxwell.jax_fdfd"]
+disallow_untyped_calls = false
+warn_return_any = false
 
 [tool.setuptools.package-data]
 "dolphindes" = ["py.typed"]

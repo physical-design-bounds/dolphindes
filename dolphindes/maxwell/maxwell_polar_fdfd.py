@@ -259,6 +259,25 @@ class TM_Polar_FDFD(Maxwell_Polar_FDFD):
         """
         return -sp.diags_array(chigrid.flatten() * self.omega**2, format="dia")
 
+    def _assemble_M(self, chigrid: ComplexGrid | None = None) -> sp.csc_array:
+        """
+        Assemble the full TM Maxwell operator M = M0 + diagM(chigrid).
+
+        Parameters
+        ----------
+        chigrid : ComplexGrid, optional
+            Material susceptibility grid. The default None corresponds to vacuum
+            (M = M0).
+
+        Returns
+        -------
+        M : sp.csc_array
+            The system operator for the linear solve M @ Ez = 1j*omega*source.
+        """
+        if chigrid is None:
+            return sp.csc_array(self.M0)
+        return sp.csc_array(self.M0 + self._get_diagM_from_chigrid(chigrid))
+
     def get_TM_field(
         self, sourcegrid: ComplexGrid, chigrid: ComplexGrid | None = None
     ) -> ComplexArray:
@@ -277,11 +296,7 @@ class TM_Polar_FDFD(Maxwell_Polar_FDFD):
         Ez : ComplexArray
             Electric field solution (flattened).
         """
-        M = (
-            self.M0 + self._get_diagM_from_chigrid(chigrid)
-            if chigrid is not None
-            else self.M0
-        )
+        M = self._assemble_M(chigrid)
         RHS = 1j * self.omega * np.asarray(sourcegrid).flatten()
         Ez: ComplexArray = spla.spsolve(M, RHS)
         return Ez
@@ -398,7 +413,7 @@ class TM_Polar_FDFD(Maxwell_Polar_FDFD):
 
     def get_GaaInv(
         self, A_mask: BoolGrid, chigrid: ComplexGrid | None = None
-    ) -> tuple[sp.csc_array, sp.csr_array]:
+    ) -> tuple[sp.csc_array, sp.csc_array]:
         """
         Compute the inverse Green's function on region A, G_{AA}^{-1}.
 
@@ -417,14 +432,10 @@ class TM_Polar_FDFD(Maxwell_Polar_FDFD):
         -------
         GaaInv : sp.csc_array
             Inverse Green's function on region A.
-        M : sp.csr_array
+        M : sp.csc_array
             Full Maxwell operator used.
         """
-        M = (
-            self.M0
-            if chigrid is None
-            else self.M0 + self._get_diagM_from_chigrid(chigrid)
-        )
+        M = self._assemble_M(chigrid)
 
         flat_A_mask = A_mask.flatten(order="F")
         designInd = np.nonzero(flat_A_mask)[0]
