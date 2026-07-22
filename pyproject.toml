@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 # This section defines your package's metadata and dependencies.
 [project]
 name = "dolphindes"
-version = "0.1.0"
+dynamic = ["version"]
 authors = [
   { name="Dolphindes Contributors"},
 ]
@@ -53,6 +53,9 @@ docs = [
     "pydata-sphinx-theme",
     "nbsphinx",
 ]
+
+[tool.setuptools.dynamic]
+version = { attr = "dolphindes.__version__" }
 
 [tool.setuptools.packages.find]
 include = ["dolphindes"]
