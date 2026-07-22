@@ -58,7 +58,7 @@ docs = [
 version = { attr = "dolphindes.__version__" }
 
 [tool.setuptools.packages.find]
-include = ["dolphindes"]
+include = ["dolphindes*"]
 
 # -----------------------------
 # Linting & Docstrings: Ruff
