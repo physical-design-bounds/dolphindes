@@ -2,6 +2,7 @@
 
 import os
 import sys
+from importlib.metadata import version as _pkg_version
 
 # -- Project information -----------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#project-information
@@ -9,7 +10,9 @@ import sys
 project = "Dolphindes"
 copyright = "2025, DolphinDes contributors"
 author = "DolphinDes contributors"
-release = "0.1.0"
+# Pull the version from the installed package so it stays in sync with
+# dolphindes/__init__.py 
+release = _pkg_version("dolphindes")
 
 # -- General configuration ---------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#general-configuration

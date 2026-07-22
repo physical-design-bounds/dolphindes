@@ -7,7 +7,6 @@ Interface in cvxopt and the Maxwell Solvers in maxwell.
 
 __all__ = [
     "Photonics_TM_FDFD",
-    "Photonics_TE_Yee_FDFD",
     "chi_to_feasible_rho",
 ]
 
@@ -420,7 +419,11 @@ class Photonics_TM_FDFD(Photonics_FDFD):
 
 
 class Photonics_TE_Yee_FDFD(Photonics_FDFD):
-    """TE polarization FDFD photonics problem (placeholder)."""
+    """TE polarization FDFD photonics problem (placeholder).
+
+    Not yet implemented and intentionally not part of the public API (kept out
+    of ``__all__``); see issue #13 for the TE solver work.
+    """
 
     def __init__(self) -> None:
         pass
