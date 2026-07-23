@@ -91,7 +91,9 @@ class SparseSharedProjQCQP(_SharedProjQCQP):
     Fs : ComplexArray
         Columns are A2^† P_j^† s1 (projector-only part used in derivatives).
     Acho : sksparse.cholmod.Factor | None
-        Symbolic/numeric CHOLMOD factorization handle (updated per solve).
+        Most recent numeric CHOLMOD factor (``None`` until the first
+        factorization). The symbolic analysis is held separately in
+        ``_Acho_symbolic`` and reused across factorizations.
     current_dual : float | None
         Cached optimal dual value after solve_current_dual_problem().
     current_lags : FloatNDArray | None
@@ -118,6 +120,11 @@ class SparseSharedProjQCQP(_SharedProjQCQP):
     DenseSharedProjQCQP : Dense analogue using LAPACK factorization.
     _SharedProjQCQP    : Base abstract class with core logic.
     """
+
+    # Symbolic CHOLMOD analysis (sparsity/fill pattern), computed once by
+    # _initialize_Acho during construction and reused by every numeric
+    # factorization. Declared here so its type is visible to static checkers.
+    _Acho_symbolic: "sksparse.cholmod.Factor"
 
     def __repr__(self) -> str:
         """Return a concise string summary (size and projector count)."""
@@ -170,7 +177,7 @@ class SparseSharedProjQCQP(_SharedProjQCQP):
                 f"analyzing A of format and shape {type(A)}, {A.shape} "
                 f"and # of nonzero elements '{A.nnz}"
             )
-        self._Acho_symbolic: sksparse.cholmod.Factor = sksparse.cholmod.analyze(A)
+        self._Acho_symbolic = sksparse.cholmod.analyze(A)
         self.Acho = None
         return self._Acho_symbolic
 
@@ -228,7 +235,10 @@ class SparseSharedProjQCQP(_SharedProjQCQP):
         assert self._Acho_symbolic is not None
         key = self._lags_key(lags)
         if key in self._factor_cache:
-            # A(lags) was already factorized successfully -> positive definite.
+            # A(lags) was already factorized successfully -> positive definite
+            # (see the cache invariant in _store_factor). Count the hit as a use
+            # so the entry is not evicted before a genuinely older one.
+            self._factor_cache.move_to_end(key)
             return True
         A = self._get_total_A(lags)
         assert sp.issparse(A)
@@ -366,7 +376,10 @@ class DenseSharedProjQCQP(_SharedProjQCQP):
         """
         key = self._lags_key(lags)
         if key in self._factor_cache:
-            # A(lags) was already factorized successfully -> positive definite.
+            # A(lags) was already factorized successfully -> positive definite
+            # (see the cache invariant in _store_factor). Count the hit as a use
+            # so the entry is not evicted before a genuinely older one.
+            self._factor_cache.move_to_end(key)
             return True
         A = self._get_total_A(lags)
         try:

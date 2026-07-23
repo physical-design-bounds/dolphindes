@@ -61,7 +61,9 @@ class _SharedProjQCQP(ABC):
     verbose : int
         Verbosity level (0 = silent).
     Acho : Any | None
-        Cholesky (or other) factorization object of the current total A matrix.
+        Most recent numeric factorization object (of the last A(lags) that was
+        factorized), set by ``_store_factor``/``_get_factorization`` and used by
+        ``_Acho_solve``. ``None`` until the first factorization.
     current_dual : float | None
         Cached dual value after solve_current_dual_problem().
     current_lags : FloatNDArray | None
