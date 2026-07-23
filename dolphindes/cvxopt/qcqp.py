@@ -9,6 +9,7 @@ implementations optimized for different matrix structures.
 __all__ = ["SparseSharedProjQCQP", "DenseSharedProjQCQP"]
 
 import copy
+from collections import OrderedDict
 from typing import Any, cast
 
 import numpy as np
@@ -127,14 +128,16 @@ class SparseSharedProjQCQP(_SharedProjQCQP):
 
     def __deepcopy__(self, memo: dict[int, Any]) -> "SparseSharedProjQCQP":
         """Copy this instance."""
-        # custom __deepcopy__ because Acho is not pickle-able
+        # custom __deepcopy__ because the CHOLMOD factorizations (the symbolic
+        # analysis and the cached numeric factors) are not pickle-able.
+        skip = {"Acho", "_Acho_symbolic", "_factor_cache"}
         new_QCQP = SparseSharedProjQCQP.__new__(SparseSharedProjQCQP)
         for name, value in self.__dict__.items():
-            if name != "Acho":
+            if name not in skip:
                 setattr(new_QCQP, name, copy.deepcopy(value, memo))
 
-        new_QCQP._initialize_Acho()  # Recompute the Cholesky factorization.
-        # If dense, will use self.current_lags.
+        new_QCQP._factor_cache = OrderedDict()  # start with an empty factor cache
+        new_QCQP._initialize_Acho()  # Recompute the symbolic Cholesky analysis.
         # TODO: update Acho with current_lags if applicable
         return new_QCQP
 
@@ -147,10 +150,15 @@ class SparseSharedProjQCQP(_SharedProjQCQP):
         """
         Symbolically analyze sparsity/fill pattern for Cholesky factorization.
 
+        The symbolic analysis is stored in ``self._Acho_symbolic`` and reused by
+        every subsequent numeric factorization (which only needs the shared
+        sparsity pattern). ``self.Acho`` holds the most recent numeric factor and
+        is reset here since no numeric factorization has been computed yet.
+
         Returns
         -------
         sksparse.cholmod.Factor
-            Analyzed (symbolic) factorization handle stored in self.Acho.
+            Analyzed (symbolic) factorization handle (``self._Acho_symbolic``).
         """
         random_lags = np.random.rand(self.n_proj_constr + self.n_gen_constr)
         A = self._get_total_A(random_lags)
@@ -162,20 +170,29 @@ class SparseSharedProjQCQP(_SharedProjQCQP):
                 f"analyzing A of format and shape {type(A)}, {A.shape} "
                 f"and # of nonzero elements '{A.nnz}"
             )
-        self.Acho = sksparse.cholmod.analyze(A)
-        return self.Acho
+        self._Acho_symbolic: sksparse.cholmod.Factor = sksparse.cholmod.analyze(A)
+        self.Acho = None
+        return self._Acho_symbolic
 
-    def _update_Acho(self, A: sp.csc_array) -> None:
+    def _factorize(self, A: sp.csc_array) -> sksparse.cholmod.Factor:
         """
-        Update numerical Cholesky factorization for total matrix A.
+        Return a fresh numeric Cholesky factor of A, reusing the symbolic analysis.
+
+        ``Factor.cholesky`` (unlike ``cholesky_inplace``) returns a new factor
+        object, so distinct factorizations can coexist in the factor cache.
 
         Parameters
         ----------
         A : sp.csc_array
             Current Hermitian (PSD / PD) system matrix.
+
+        Returns
+        -------
+        sksparse.cholmod.Factor
+            Numeric factorization of A.
         """
-        assert self.Acho is not None
-        self.Acho.cholesky_inplace(A)
+        assert self._Acho_symbolic is not None
+        return self._Acho_symbolic.cholesky(sp.csc_array(A))
 
     def _Acho_solve(self, b: ComplexArray) -> ComplexArray:
         """
@@ -208,18 +225,25 @@ class SparseSharedProjQCQP(_SharedProjQCQP):
         bool
             True if factorization succeeds (A is PSD), False otherwise.
         """
-        assert self.Acho is not None
+        assert self._Acho_symbolic is not None
+        key = self._lags_key(lags)
+        if key in self._factor_cache:
+            # A(lags) was already factorized successfully -> positive definite.
+            return True
         A = self._get_total_A(lags)
         assert sp.issparse(A)
         A = sp.csc_array(A)
         try:
-            tmp = self.Acho.cholesky(A)
-            tmp = (
-                tmp.L()
-            )  # Have to access the factor for the decomposition to be actually done.
-            return True
+            factor = self._factorize(A)
+            # Accessing the factor forces the numeric decomposition to run, so a
+            # non-PD matrix raises here rather than lazily at solve time.
+            factor.L()
         except sksparse.cholmod.CholmodNotPositiveDefiniteError:
             return False
+        # Feasible: cache the factor so the imminent get_dual at the same lags
+        # (line-search objective evaluation) reuses it instead of refactorizing.
+        self._store_factor(key, A, factor)
+        return True
 
 
 class DenseSharedProjQCQP(_SharedProjQCQP):
@@ -294,16 +318,21 @@ class DenseSharedProjQCQP(_SharedProjQCQP):
             f"{self.n_proj_constr} projectors."
         )
 
-    def _update_Acho(self, A: ArrayLike) -> None:
+    def _factorize(self, A: ArrayLike) -> Any:
         """
-        Update dense Cholesky factorization of A.
+        Return a dense Cholesky factorization (cho_factor tuple) of A.
 
         Parameters
         ----------
         A : ArrayLike
             Hermitian positive (semi)definite matrix to factor.
+
+        Returns
+        -------
+        Any
+            The ``scipy.linalg.cho_factor`` result ``(c, lower)``.
         """
-        self.Acho = la.cho_factor(A)
+        return la.cho_factor(A)
 
     def _Acho_solve(self, b: ComplexArray) -> ComplexArray:
         """
@@ -335,9 +364,16 @@ class DenseSharedProjQCQP(_SharedProjQCQP):
         bool
             True if Cholesky succeeds, False otherwise.
         """
+        key = self._lags_key(lags)
+        if key in self._factor_cache:
+            # A(lags) was already factorized successfully -> positive definite.
+            return True
         A = self._get_total_A(lags)
         try:
-            la.cho_factor(A)
-            return True
+            factor = self._factorize(A)
         except la.LinAlgError:
             return False
+        # Feasible: cache the factor so the imminent get_dual at the same lags
+        # (line-search objective evaluation) reuses it instead of refactorizing.
+        self._store_factor(key, A, factor)
+        return True
