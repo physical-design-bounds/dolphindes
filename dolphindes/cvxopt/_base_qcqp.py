@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from collections import namedtuple
+from collections import OrderedDict, namedtuple
 from typing import TYPE_CHECKING, Any, Iterator, Optional, Tuple, cast
 
 import numpy as np
@@ -61,7 +61,9 @@ class _SharedProjQCQP(ABC):
     verbose : int
         Verbosity level (0 = silent).
     Acho : Any | None
-        Cholesky (or other) factorization object of the current total A matrix.
+        Most recent numeric factorization object (of the last A(lags) that was
+        factorized), set by ``_store_factor``/``_get_factorization`` and used by
+        ``_Acho_solve``. ``None`` until the first factorization.
     current_dual : float | None
         Cached dual value after solve_current_dual_problem().
     current_lags : FloatNDArray | None
@@ -190,6 +192,17 @@ class _SharedProjQCQP(ABC):
         self.current_xstar: Optional[ComplexArray] = None
         self.use_precomp = True
 
+        # Cache of recently computed Cholesky factorizations, keyed by the lags
+        # they correspond to. During dual optimization the same A(lags) is often
+        # factorized several times in a row (the line-search feasibility check
+        # followed by the objective evaluation at the same point, and the accepted
+        # step re-evaluated at the start of the next iteration). Reusing the
+        # factorization in those cases avoids the dominant cost of get_dual.
+        # A size of 2 is enough to catch both redundancies (see _get_factorization)
+        # while keeping at most two (large) factorizations in memory.
+        self._factor_cache: "OrderedDict[bytes, Tuple[Any, Any]]" = OrderedDict()
+        self._factor_cache_maxsize = 2
+
         if self.use_precomp:
             self.compute_precomputed_values()
 
@@ -208,6 +221,10 @@ class _SharedProjQCQP(ABC):
         This speeds up repeated assembly of A(lags) and derivative-related
         operations when the number of constraints is moderate.
         """
+        # The constraint matrices are being rebuilt, so any cached factorization
+        # (keyed by lags, but implicitly tied to the current A_k) is now stale.
+        self._invalidate_factor_cache()
+
         self.precomputed_As = []
         for i in range(self.n_proj_constr):
             Ak = Sym(self.A1 @ self.Proj[i] @ self.A2)
@@ -301,17 +318,83 @@ class _SharedProjQCQP(ABC):
         """Return Σ_general μ_j c_2j (0 if no general constraints)."""
         return cast(float, np.sum(lags[self.n_proj_constr :] * self.c_2j))
 
-    @abstractmethod
-    def _update_Acho(self, A: sp.csc_array | ComplexArray) -> None:
-        """
-        Update the Cholesky factorization to be that of the input matrix A.
+    @staticmethod
+    def _lags_key(lags: FloatNDArray) -> bytes:
+        """Return a hashable, value-based key identifying a lags vector.
 
-        Needs to be implemented by subclasses.
+        Two lags arrays with identical float64 values map to the same key, so a
+        factorization computed for one call is reused for the next call at the
+        same point regardless of which array object carried it.
+        """
+        return np.ascontiguousarray(lags, dtype=np.float64).tobytes()
+
+    def _invalidate_factor_cache(self) -> None:
+        """Drop all cached factorizations.
+
+        Must be called whenever A(lags) changes for a fixed lags, i.e. whenever
+        A0, precomputed_As or the constraint set are modified.
+        """
+        self._factor_cache.clear()
+
+    def _store_factor(self, key: bytes, A: Any, factor: Any) -> None:
+        """Record (A, factor) for ``key`` and mark it the active factorization.
+
+        Evicts least-recently-used entries beyond ``_factor_cache_maxsize``.
+        Setting ``self.Acho`` keeps the penalty/Hessian solves in get_dual, which
+        operate through ``_Acho_solve`` on the current factor, consistent.
+        """
+        self.Acho = factor
+        self._factor_cache[key] = (A, factor)
+        self._factor_cache.move_to_end(key)
+        while len(self._factor_cache) > self._factor_cache_maxsize:
+            self._factor_cache.popitem(last=False)
+
+    def _get_factorization(self, lags: FloatNDArray) -> Tuple[Any, Any]:
+        """Return (A, factor) for ``lags``, reusing a cached factorization if any.
+
+        On a cache miss, A(lags) is assembled and factorized; on a hit, both the
+        assembly and the (dominant) Cholesky factorization are skipped. Either
+        way ``self.Acho`` is set to the returned factor.
+
+        A cache of size 2 removes the two redundant factorizations that arise per
+        line-search step: (1) the feasibility check at a point immediately
+        followed by the objective evaluation at the same point, and (2) the
+        accepted step, which is the second-to-last point tried during
+        backtracking and is re-evaluated at the start of the next iteration.
+        """
+        key = self._lags_key(lags)
+        cached = self._factor_cache.get(key)
+        if cached is not None:
+            A, factor = cached
+            self._factor_cache.move_to_end(key)
+            self.Acho = factor
+            return A, factor
+
+        A = self._get_total_A(lags)
+        factor = self._factorize(A)
+        self._store_factor(key, A, factor)
+        return A, factor
+
+    @abstractmethod
+    def _factorize(self, A: sp.csc_array | ComplexArray) -> Any:
+        """
+        Return a new Cholesky factorization object of the Hermitian PD matrix A.
+
+        Unlike an in-place update, this returns a distinct factor object so that
+        several factorizations can be cached simultaneously. Needs to be
+        implemented by subclasses.
 
         Parameters
         ----------
         A : sp.csc_array | ComplexArray
-            New total Hermitian matrix to factorize (or store for dense solve).
+            Hermitian positive (semi)definite matrix to factorize.
+
+        Returns
+        -------
+        Any
+            An opaque factorization object accepted by ``_Acho_solve`` (a
+            sksparse CHOLMOD Factor for sparse, a scipy cho_factor tuple for
+            dense).
         """
         pass
 
@@ -432,9 +515,8 @@ class _SharedProjQCQP(ABC):
         xAx : float
             Value x*^† A x* (real scalar).
         """
-        A = self._get_total_A(lags)
+        A, _factor = self._get_factorization(lags)
         S = self._get_total_S(lags)
-        self._update_Acho(A)
         x_star: ComplexArray = self._Acho_solve(S)
         xAx: float = np.real(np.vdot(x_star, A @ x_star))
 

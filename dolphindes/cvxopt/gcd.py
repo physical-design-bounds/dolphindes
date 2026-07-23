@@ -113,6 +113,9 @@ def merge_lead_constraints(QCQP: _SharedProjQCQP, merged_num: int = 2) -> None:
 
     QCQP.current_grad = QCQP.current_hess = None
 
+    # precomputed_As/Fs were edited in place, so cached factorizations are stale.
+    QCQP._invalidate_factor_cache()
+
 
 def add_constraints(
     QCQP: _SharedProjQCQP,
@@ -185,6 +188,9 @@ def add_constraints(
 
     QCQP.n_proj_constr = len(QCQP.Proj)
     QCQP.current_grad = QCQP.current_hess = None
+
+    # precomputed_As/Fs were edited in place, so cached factorizations are stale.
+    QCQP._invalidate_factor_cache()
 
 
 def run_gcd(
