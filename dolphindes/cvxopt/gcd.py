@@ -13,7 +13,7 @@ Mathematical details: Appendix B of https://arxiv.org/abs/2504.10469
 """
 
 from dataclasses import dataclass
-from typing import Any, Literal, get_args
+from typing import Any, Literal, cast, get_args
 
 import numpy as np
 import scipy.linalg as la
@@ -67,6 +67,92 @@ def _hs_inner(
     return _frob_inner(A_i, A_j) + float(np.real(np.vdot(F_i, F_j)))
 
 
+def _to_dense(M: SparseDense) -> ComplexArray:
+    """Return ``M`` as a dense complex ndarray (no-op for dense input)."""
+    dense = cast(Any, M).toarray() if sp.issparse(M) else M
+    return np.asarray(dense, dtype=complex)
+
+
+def _restrict(M: SparseDense, ix: "np.ndarray[Any, Any]") -> SparseDense:
+    """Restrict ``M`` to the rows/cols in ``ix`` (dense or sparse), preserving type."""
+    if sp.issparse(M):
+        return cast(SparseDense, sp.csc_array(sp.csr_array(M)[ix, :])[:, ix])
+    return cast(SparseDense, np.asarray(M)[np.ix_(ix, ix)])
+
+
+def _hs_analytic_available(QCQP: _SharedProjQCQP) -> bool:
+    """Whether the closed-form HS Gram / inner product applies to this QCQP.
+
+    The reduction in :func:`_hs_kernels` expresses every HS inner product as a
+    bilinear form in the projector *diagonals*, so it requires only that the
+    projectors are diagonal. It applies to both formulations: the kernels are
+    dense for a dense ``A1`` and sparse for a sparse ``A1`` (where ``A1, A2`` are
+    themselves sparse, so their products stay sparse), and the projector
+    diagonals contract against them either way.
+    """
+    return QCQP.Proj.is_diagonal()
+
+
+def _hs_kernels(
+    QCQP: _SharedProjQCQP,
+) -> tuple[SparseDense, SparseDense, SparseDense]:
+    """Build (and cache) the support-restricted HS kernels ``(L, K, N)``.
+
+    For diagonal projectors ``P_j = diag(p_j)`` the augmented HS inner product is
+    bilinear in the diagonals:
+
+        <(A_i, F_i), (A_j, F_j)>
+            = 1/2 Re(p_i^T L p_j) + 1/2 Re(p_i^H K p_j) + Re(p_i^T N conj(p_j))
+
+    with kernels that depend only on ``(A1, A2, s1)``, not on the projector data:
+
+        C  = A2 A1,                   L = C (.) C^T
+        G1 = A1^H A1,  G2 = A2 A2^H,  K = G1 (.) G2^T
+        N  = conj(diag s1) G2 diag(s1)
+
+    where ``(.)`` is the elementwise (Hadamard) product. The ``1/2`` factors and
+    the split into the ``L`` term (from ``tr(M_i M_j)``) and the ``K`` term (from
+    ``tr(M_i^H M_j)``) both come from the symmetrization ``A_k = Sym(A1 P_k A2)``.
+
+    The kernels are kept dense for a dense ``A1`` and sparse for a sparse ``A1``
+    (there ``A1, A2`` and hence ``C, G1, G2`` are all sparse). Only the projector
+    diagonals on ``Pstruct``'s support ever enter, so the kernels are restricted
+    to those rows/cols (``Pstruct.indices``), matching the ``(nnz, k)`` layout of
+    ``Projectors.get_Pdata_column_stack``. ``(A1, A2, s1, Pstruct)`` are fixed for
+    the whole GCD run, so the result is cached on QCQP.
+    """
+    cached = getattr(QCQP, "_hs_kernel_cache", None)
+    if cached is not None:
+        return cast("tuple[SparseDense, SparseDense, SparseDense]", cached)
+
+    s1 = np.asarray(QCQP.s1, dtype=complex)
+
+    if sp.issparse(QCQP.A1):
+        A1 = sp.csc_array(QCQP.A1)
+        A2 = sp.csc_array(QCQP.A2)
+        C = A2 @ A1
+        G1 = A1.conj().T @ A1
+        G2 = A2 @ A2.conj().T
+        L: SparseDense = sp.csr_array(C.multiply(C.T))
+        K: SparseDense = sp.csr_array(G1.multiply(G2.T))
+        S = sp.diags_array(s1)
+        N: SparseDense = sp.csr_array(S.conj() @ G2 @ S)
+    else:
+        A1d = _to_dense(QCQP.A1)
+        A2d = _to_dense(QCQP.A2)
+        C = A2d @ A1d
+        G1 = A1d.conj().T @ A1d
+        G2 = A2d @ A2d.conj().T
+        L = C * C.T
+        K = G1 * G2.T
+        N = np.conj(s1)[:, None] * G2 * s1[None, :]
+
+    ix = QCQP.Proj.Pstruct.indices
+    kernels = (_restrict(L, ix), _restrict(K, ix), _restrict(N, ix))
+    QCQP._hs_kernel_cache = kernels  # type: ignore[attr-defined]
+    return kernels
+
+
 def _constraint_ops(
     QCQP: _SharedProjQCQP, P: SparseDense
 ) -> tuple[SparseDense, ComplexArray]:
@@ -88,10 +174,17 @@ def _constraint_ops_for_data(
 def _hs_gram_matrix(QCQP: _SharedProjQCQP) -> FloatNDArray:
     """Real (k, k) Gram matrix of the projector constraints in the HS metric.
 
-    Uses the cached ``precomputed_As`` (quadratic forms) and ``Fs`` (linear
-    forms), so no operators are rebuilt. Only the projector constraints (the
-    first ``n_proj_constr``) are included; general constraints are untouched.
+    When the closed form applies (:func:`_hs_analytic_available`), the Gram
+    matrix is computed analytically in ``O(n^2 k)`` via
+    :func:`_hs_gram_matrix_analytic`.
+    Otherwise this falls back to the ``O(k^2 n^2)`` Frobenius double loop over the
+    cached ``precomputed_As`` (quadratic forms) and ``Fs`` (linear forms), so no
+    operators are rebuilt. Only the projector constraints (the first
+    ``n_proj_constr``) are included; general constraints are untouched.
     """
+    if _hs_analytic_available(QCQP):
+        return _hs_gram_matrix_analytic(QCQP)
+
     k = QCQP.n_proj_constr
     As = QCQP.precomputed_As
     Fs = QCQP.Fs
@@ -104,6 +197,25 @@ def _hs_gram_matrix(QCQP: _SharedProjQCQP) -> FloatNDArray:
             G[i, j] = val
             G[j, i] = val
     return G
+
+
+def _hs_gram_matrix_analytic(QCQP: _SharedProjQCQP) -> FloatNDArray:
+    """Closed-form HS Gram matrix of the projector constraints.
+
+    Replaces the ``O(k^2 n^2)`` Frobenius double loop of :func:`_hs_gram_matrix`
+    with three tall-skinny BLAS products against the cached kernels
+    (:func:`_hs_kernels`), i.e. ``O(n^2 k)`` and dominated by dense gemms. Only
+    valid when :func:`_hs_analytic_available`.
+    """
+    L, K, N = _hs_kernels(QCQP)
+    P = QCQP.Proj.get_Pdata_column_stack()  # (nnz, k)
+    G = (
+        0.5 * np.real(P.T @ (L @ P))
+        + 0.5 * np.real(P.conj().T @ (K @ P))
+        + np.real(P.T @ (N @ P.conj()))
+    )
+    # symmetrize to clear asymmetric rounding error (G is symmetric in exact math)
+    return cast(FloatNDArray, 0.5 * (G + G.T))
 
 
 def _orthonormalize_hs(QCQP: _SharedProjQCQP) -> None:
@@ -137,10 +249,53 @@ def _orthonormalize_hs(QCQP: _SharedProjQCQP) -> None:
     QCQP.compute_precomputed_values()
 
 
+def _orthonormalize_new_hs_analytic(
+    QCQP: _SharedProjQCQP, added_Pdata_list: list[ComplexArray]
+) -> None:
+    """Run modified Gram-Schmidt on new constraints in the HS metric.
+
+    Operates purely on the projector diagonals via the cached kernels (no ``A_k``
+    operators are built).
+    Equivalent to :func:`_orthonormalize_new_hs` but ``O(n^2)`` per candidate
+    (kernel matvecs) instead of the ``O(n^3)`` constraint-operator rebuilds.
+    Assumes the existing projector constraints are already HS-orthonormal, as GCD
+    maintains. Only valid when :func:`_hs_analytic_available`.
+    """
+    L, K, N = _hs_kernels(QCQP)
+
+    def hs_inner(p: ComplexArray, q: ComplexArray) -> float:
+        return float(
+            0.5 * np.real(p @ (L @ q))
+            + 0.5 * np.real(p.conj() @ (K @ q))
+            + np.real(p @ (N @ q.conj()))
+        )
+
+    existing = QCQP.Proj.get_Pdata_column_stack()  # (nnz, n_proj_constr)
+    basis = [existing[:, j] for j in range(existing.shape[1])]
+
+    for m in range(len(added_Pdata_list)):
+        a = np.array(added_Pdata_list[m], dtype=complex)
+        init_norm_sq = hs_inner(a, a)
+        for q in basis:
+            a = a - hs_inner(q, a) * q
+        norm_sq = hs_inner(a, a)
+        if norm_sq > 1e-14 * max(init_norm_sq, 1.0):
+            a = a / np.sqrt(norm_sq)
+        # else: the constraint is (numerically) already in the span, so the
+        # residual is an ~zero operator. Leaving it un-normalized keeps it inert
+        # (it enters with a ~zero gradient and stays at multiplier 0).
+        added_Pdata_list[m] = a
+        basis.append(a.copy())
+
+
 def _orthonormalize_new_hs(
     QCQP: _SharedProjQCQP, added_Pdata_list: list[ComplexArray]
 ) -> None:
     """Orthonormalize new projector data against the existing HS-orthonormal set."""
+    if _hs_analytic_available(QCQP):
+        _orthonormalize_new_hs_analytic(QCQP, added_Pdata_list)
+        return
+
     proj_cstrt_num = QCQP.n_proj_constr
     existing_Pdata = QCQP.Proj.get_Pdata_column_stack()
 

@@ -802,6 +802,79 @@ def test_run_gcd_hilbert_schmidt_runs(sparse_qcqp_data):
     assert qcqp.current_dual is not None and np.isfinite(qcqp.current_dual)
 
 
+def _dense_diag_qcqp(n=24, k=5, seed=7):
+    """A dense QCQP with diagonal projectors (partial support) for the closed-form
+    HS path. Returns a DenseSharedProjQCQP on which ``_hs_analytic_available`` is
+    True."""
+    rng = np.random.default_rng(seed)
+
+    def rc(shape):
+        return rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+
+    M = rc((n, n))
+    A0 = M.conj().T @ M + n * np.eye(n)  # Hermitian PD
+    A1 = rc((n, n))
+    s0 = rc(n)
+    s1 = rc(n)
+    Pdiags = rc((n, k))
+    Pdiags[rng.random((n, k)) < 0.3] = 0.0  # sparse, unequal projector supports
+    Projlist = [sp.diags_array(Pdiags[:, j], format="csc") for j in range(k)]
+    Pstruct = Projlist[0] != 0
+    for P in Projlist[1:]:
+        Pstruct = Pstruct.maximum(P != 0)
+    return DenseSharedProjQCQP(
+        A0, s0, 0.0, A1, s1, Projlist, sp.csc_array(Pstruct), A2=None, verbose=0
+    )
+
+
+def _assert_hs_analytic_matches_loop(qcqp, monkeypatch):
+    """The closed-form HS Gram matrix and new-constraint orthonormalization match
+    the operator-based double-loop fallback to machine precision."""
+    assert gcd._hs_analytic_available(qcqp)
+
+    # (1) Gram matrix: analytic vs forced loop.
+    gram_analytic = gcd._hs_gram_matrix(qcqp)
+    monkeypatch.setattr(gcd, "_hs_analytic_available", lambda _q: False)
+    gram_loop = gcd._hs_gram_matrix(qcqp)
+    monkeypatch.undo()
+    assert np.allclose(gram_analytic, gram_loop, atol=1e-8)
+
+    # (2) Orthonormalizing new constraints against the HS-orthonormal basis.
+    qcqp.current_lags = qcqp.find_feasible_lags()
+    gcd._orthonormalize_hs(qcqp)
+    rng = np.random.default_rng(1)
+    nnz = qcqp.Proj.Pstruct.size
+    new_analytic = [rng.standard_normal(nnz) + 1j * rng.standard_normal(nnz)
+                    for _ in range(2)]
+    new_loop = [a.copy() for a in new_analytic]
+
+    gcd._orthonormalize_new_hs(qcqp, new_analytic)  # analytic path
+    monkeypatch.setattr(gcd, "_hs_analytic_available", lambda _q: False)
+    gcd._orthonormalize_new_hs(qcqp, new_loop)  # op-based fallback
+    monkeypatch.undo()
+    for a, b in zip(new_analytic, new_loop):
+        assert np.allclose(a, b, atol=1e-8)
+
+
+def test_hs_analytic_matches_loop_dense(monkeypatch):
+    """Dense formulation: closed-form HS matches the operator loop."""
+    _assert_hs_analytic_matches_loop(_dense_diag_qcqp(), monkeypatch)
+
+
+def test_hs_analytic_matches_loop_sparse(sparse_qcqp_data, monkeypatch):
+    """Sparse formulation: closed-form HS (sparse kernels) matches the loop."""
+    _assert_hs_analytic_matches_loop(sparse_qcqp_data["qcqp"], monkeypatch)
+
+
+def test_hs_kernel_cache_reused():
+    """Kernels are built once and cached (they depend only on A1, A2, s1)."""
+    qcqp = _dense_diag_qcqp()
+    k1 = gcd._hs_kernels(qcqp)
+    k2 = gcd._hs_kernels(qcqp)
+    for a, b in zip(k1, k2):
+        assert a is b  # same cached array objects, not recomputed
+
+
 def test_invalid_ortho_metric_raises():
     """An unknown ortho_metric is rejected at construction time."""
     with pytest.raises(ValueError, match="ortho_metric"):
