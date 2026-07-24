@@ -80,15 +80,32 @@ def _restrict(M: SparseDense, ix: "np.ndarray[Any, Any]") -> SparseDense:
     return cast(SparseDense, np.asarray(M)[np.ix_(ix, ix)])
 
 
-def _hs_analytic_available(QCQP: _SharedProjQCQP) -> bool:
-    """Whether the closed-form HS Gram / inner product applies to this QCQP.
+# --- Closed-form HS inner products for diagonal projectors --------------------
+#
+# HS orthonormalization needs the inner product <(A_i, F_i), (A_j, F_j)> between
+# pairs of projector constraints (see _hs_inner). Done directly, each inner
+# product contracts the constraint operators A_k = Sym(A1 P_k A2), so a full Gram
+# matrix costs O(k^2) contractions and every new constraint first builds its A_k.
+#
+# For DIAGONAL projectors P_j = diag(p_j) that inner product collapses to a
+# bilinear form in the diagonals alone,
+#
+#     <(A_i, F_i), (A_j, F_j)>
+#         = 1/2 Re(p_i^T L p_j) + 1/2 Re(p_i^H K p_j) + Re(p_i^T N conj(p_j)),
+#
+# against three kernels (L, K, N) fixed by (A1, A2, s1) (built once by
+# _hs_kernels). This replaces the O(k^2) operator contractions with a few shared
+# kernel-times-P products and never builds an A_k. Two consumers use it:
+# _hs_gram_matrix_analytic (all pairs at once) and _orthonormalize_new_hs_analytic
+# (one new constraint against the basis). Derivation: Appendix B of
+# arXiv:2504.10469.
 
-    The reduction in :func:`_hs_kernels` expresses every HS inner product as a
-    bilinear form in the projector *diagonals*, so it requires only that the
-    projectors are diagonal. It applies to both formulations: the kernels are
-    dense for a dense ``A1`` and sparse for a sparse ``A1`` (where ``A1, A2`` are
-    themselves sparse, so their products stay sparse), and the projector
-    diagonals contract against them either way.
+
+def _hs_analytic_available(QCQP: _SharedProjQCQP) -> bool:
+    """Return True if the closed-form HS path applies, i.e. projectors are diagonal.
+
+    Holds for both formulations: the kernels come out dense for a dense ``A1`` and
+    sparse for a sparse ``A1`` (where ``A1, A2`` and their products stay sparse).
     """
     return QCQP.Proj.is_diagonal()
 
@@ -96,30 +113,16 @@ def _hs_analytic_available(QCQP: _SharedProjQCQP) -> bool:
 def _hs_kernels(
     QCQP: _SharedProjQCQP,
 ) -> tuple[SparseDense, SparseDense, SparseDense]:
-    """Build (and cache) the support-restricted HS kernels ``(L, K, N)``.
-
-    For diagonal projectors ``P_j = diag(p_j)`` the augmented HS inner product is
-    bilinear in the diagonals:
-
-        <(A_i, F_i), (A_j, F_j)>
-            = 1/2 Re(p_i^T L p_j) + 1/2 Re(p_i^H K p_j) + Re(p_i^T N conj(p_j))
-
-    with kernels that depend only on ``(A1, A2, s1)``, not on the projector data:
+    """Build and cache the kernels ``(L, K, N)`` of the bilinear form above.
 
         C  = A2 A1,                   L = C (.) C^T
         G1 = A1^H A1,  G2 = A2 A2^H,  K = G1 (.) G2^T
         N  = conj(diag s1) G2 diag(s1)
 
-    where ``(.)`` is the elementwise (Hadamard) product. The ``1/2`` factors and
-    the split into the ``L`` term (from ``tr(M_i M_j)``) and the ``K`` term (from
-    ``tr(M_i^H M_j)``) both come from the symmetrization ``A_k = Sym(A1 P_k A2)``.
-
-    The kernels are kept dense for a dense ``A1`` and sparse for a sparse ``A1``
-    (there ``A1, A2`` and hence ``C, G1, G2`` are all sparse). Only the projector
-    diagonals on ``Pstruct``'s support ever enter, so the kernels are restricted
-    to those rows/cols (``Pstruct.indices``), matching the ``(nnz, k)`` layout of
-    ``Projectors.get_Pdata_column_stack``. ``(A1, A2, s1, Pstruct)`` are fixed for
-    the whole GCD run, so the result is cached on QCQP.
+    with ``(.)`` the elementwise product. Only projector diagonals on
+    ``Pstruct``'s support enter, so the kernels are restricted to those rows/cols
+    to match the ``(nnz, k)`` layout of ``Projectors.get_Pdata_column_stack``.
+    ``(A1, A2, s1, Pstruct)`` are constant over a GCD run, so the result is cached.
     """
     cached = getattr(QCQP, "_hs_kernel_cache", None)
     if cached is not None:
@@ -174,13 +177,11 @@ def _constraint_ops_for_data(
 def _hs_gram_matrix(QCQP: _SharedProjQCQP) -> FloatNDArray:
     """Real (k, k) Gram matrix of the projector constraints in the HS metric.
 
-    When the closed form applies (:func:`_hs_analytic_available`), the Gram
-    matrix is computed analytically in ``O(n^2 k)`` via
-    :func:`_hs_gram_matrix_analytic`.
-    Otherwise this falls back to the ``O(k^2 n^2)`` Frobenius double loop over the
-    cached ``precomputed_As`` (quadratic forms) and ``Fs`` (linear forms), so no
-    operators are rebuilt. Only the projector constraints (the first
-    ``n_proj_constr``) are included; general constraints are untouched.
+    For diagonal projectors this uses the closed form
+    (:func:`_hs_gram_matrix_analytic`); otherwise it falls back to the pairwise
+    Frobenius double loop over the cached ``precomputed_As`` (quadratic forms) and
+    ``Fs`` (linear forms), so no operators are rebuilt. Only the projector
+    constraints (the first ``n_proj_constr``) are included.
     """
     if _hs_analytic_available(QCQP):
         return _hs_gram_matrix_analytic(QCQP)
@@ -200,12 +201,12 @@ def _hs_gram_matrix(QCQP: _SharedProjQCQP) -> FloatNDArray:
 
 
 def _hs_gram_matrix_analytic(QCQP: _SharedProjQCQP) -> FloatNDArray:
-    """Closed-form HS Gram matrix of the projector constraints.
+    """Closed-form HS Gram matrix: the bilinear form applied to all pairs at once.
 
-    Replaces the ``O(k^2 n^2)`` Frobenius double loop of :func:`_hs_gram_matrix`
-    with three tall-skinny BLAS products against the cached kernels
-    (:func:`_hs_kernels`), i.e. ``O(n^2 k)`` and dominated by dense gemms. Only
-    valid when :func:`_hs_analytic_available`.
+    Vectorizes the pairwise inner product over the projector diagonals ``P``
+    (columns), so the ``O(k^2)`` operator contractions of :func:`_hs_gram_matrix`
+    become a handful of kernel-times-``P`` products. Only valid when
+    :func:`_hs_analytic_available`.
     """
     L, K, N = _hs_kernels(QCQP)
     P = QCQP.Proj.get_Pdata_column_stack()  # (nnz, k)
@@ -254,16 +255,15 @@ def _orthonormalize_new_hs_analytic(
 ) -> None:
     """Run modified Gram-Schmidt on new constraints in the HS metric.
 
-    Operates purely on the projector diagonals via the cached kernels (no ``A_k``
-    operators are built).
-    Equivalent to :func:`_orthonormalize_new_hs` but ``O(n^2)`` per candidate
-    (kernel matvecs) instead of the ``O(n^3)`` constraint-operator rebuilds.
-    Assumes the existing projector constraints are already HS-orthonormal, as GCD
-    maintains. Only valid when :func:`_hs_analytic_available`.
+    Same result as the operator-based :func:`_orthonormalize_new_hs`, but the
+    inner products run on the projector diagonals via the kernels (``hs_inner``
+    below) so no ``A_k`` are built. Assumes the existing constraints are already
+    HS-orthonormal, as GCD maintains; only valid when :func:`_hs_analytic_available`.
     """
     L, K, N = _hs_kernels(QCQP)
 
     def hs_inner(p: ComplexArray, q: ComplexArray) -> float:
+        """Kernel form of the HS inner product between two projector diagonals."""
         return float(
             0.5 * np.real(p @ (L @ q))
             + 0.5 * np.real(p.conj() @ (K @ q))
