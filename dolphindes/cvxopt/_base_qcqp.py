@@ -658,15 +658,21 @@ class _SharedProjQCQP(ABC):
                 grad_penalty = np.zeros(grad.shape[0])
                 hess_penalty = np.zeros((grad.shape[0], grad.shape[0]))
 
+                # Fv depends on j, and with p_j = A^-1 v_j the contributions
+                #
+                #   dP/dl_k       = sum_j -p_j^† A_k p_j
+                #   d2P/dl_k dl_l = sum_j 2 Re[ (A_k p_j)^† A^-1 (A_l p_j) ]
+                #
+                # are quadratic in p_j, so the sum over j cannot be collapsed by
+                # summing Fv first: sum_j x_j^† M x_j is not
+                # (sum_j x_j)^† M (sum_j x_j).
                 Fv = np.zeros((penalty_matrix.shape[0], len(grad)), dtype=complex)
                 for j in range(penalty_matrix.shape[1]):
                     for k, Ak in enumerate(self.precomputed_As):
-                        # yes this is a double for loop, hessian for fake sources
-                        # is likely a speed bottleneck
                         Fv[:, k] = Ak @ A_inv_penalty[:, j]
 
-                grad_penalty += np.real(-A_inv_penalty[:, j].conj().T @ Fv)
-                hess_penalty += 2 * np.real(Fv.conj().T @ self._Acho_solve(Fv))
+                    grad_penalty += np.real(-A_inv_penalty[:, j].conj().T @ Fv)
+                    hess_penalty += 2 * np.real(Fv.conj().T @ self._Acho_solve(Fv))
 
             elif get_grad:
                 grad = cast(FloatNDArray, grad)
