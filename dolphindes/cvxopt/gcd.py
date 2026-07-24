@@ -87,7 +87,7 @@ def _restrict(M: SparseDense, ix: "np.ndarray[Any, Any]") -> SparseDense:
 # product contracts the constraint operators A_k = Sym(A1 P_k A2), so a full Gram
 # matrix costs O(k^2) contractions and every new constraint first builds its A_k.
 #
-# For DIAGONAL projectors P_j = diag(p_j) that inner product collapses to a
+# For diagonal projectors P_j = diag(p_j) that inner product collapses to a
 # bilinear form in the diagonals alone,
 #
 #     <(A_i, F_i), (A_j, F_j)>
@@ -97,8 +97,7 @@ def _restrict(M: SparseDense, ix: "np.ndarray[Any, Any]") -> SparseDense:
 # _hs_kernels). This replaces the O(k^2) operator contractions with a few shared
 # kernel-times-P products and never builds an A_k. Two consumers use it:
 # _hs_gram_matrix_analytic (all pairs at once) and _orthonormalize_new_hs_analytic
-# (one new constraint against the basis). Derivation: Appendix B of
-# arXiv:2504.10469.
+# (one new constraint against the basis).
 
 
 def _hs_analytic_available(QCQP: _SharedProjQCQP) -> bool:
