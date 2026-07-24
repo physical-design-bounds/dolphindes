@@ -12,7 +12,12 @@ import numpy as np
 import pytest
 import scipy.sparse as sp
 
-from dolphindes.cvxopt import DenseSharedProjQCQP, SparseSharedProjQCQP
+from dolphindes.cvxopt import (
+    DenseSharedProjQCQP,
+    GCDHyperparameters,
+    SparseSharedProjQCQP,
+    gcd,
+)
 
 
 @pytest.fixture
@@ -690,3 +695,114 @@ def test_dense_qcqp_with_nondiagonal_projectors():
     assert lags_opt.shape[0] == len(Projlist)
     assert grad_opt is not None and grad_opt.shape[0] == len(Projlist)
     assert xstar.shape[0] == n
+
+
+def _interior_feasible_lags(qcqp):
+    """A dual-feasible multiplier vector pushed slightly interior so that
+    A(lags) is comfortably positive definite for the Cholesky solves."""
+    lags = np.array(qcqp.find_feasible_lags(), dtype=float)
+    lags[1] *= 2.0
+    return lags
+
+
+def _assert_hs_orthonormal(qcqp, atol=1e-7):
+    """The projector constraints should be orthonormal in the augmented HS metric."""
+    gram = gcd._hs_gram_matrix(qcqp)
+    assert np.allclose(gram, np.eye(qcqp.n_proj_constr), atol=atol), (
+        "constraint basis is not HS-orthonormal"
+    )
+
+
+def _check_hs_invariants(qcqp):
+    """Every HS-metric basis operation preserves the dual value and keeps the
+    constraint basis HS-orthonormal.
+
+    Exercises the full sequence a GCD run relies on: initial re-orthonormalization,
+    then add_constraints, then merge_lead_constraints. Each step's assertion
+    message identifies where a regression occurred.
+    """
+    qcqp.current_lags = _interior_feasible_lags(qcqp)
+
+    # (1) Re-orthonormalization is a pure basis change: dual invariant.
+    dual = qcqp.get_dual(qcqp.current_lags)[0]
+    gcd._orthonormalize_hs(qcqp)
+    assert np.isclose(dual, qcqp.get_dual(qcqp.current_lags)[0], rtol=1e-6, atol=1e-7), (
+        "HS orthonormalization changed the dual value"
+    )
+    _assert_hs_orthonormal(qcqp)
+
+    # (2) Adding constraints enters them with multiplier 0, so the dual is unchanged.
+    rng = np.random.default_rng(0)
+    nnz = qcqp.Proj.Pstruct.size
+    new = [rng.standard_normal(nnz) + 1j * rng.standard_normal(nnz) for _ in range(2)]
+    dual = qcqp.get_dual(qcqp.current_lags)[0]
+    qcqp.add_constraints(new, orthonormalize=True, metric="hilbert_schmidt")
+    assert np.isclose(dual, qcqp.get_dual(qcqp.current_lags)[0], rtol=1e-6, atol=1e-7), (
+        "HS add_constraints changed the dual value"
+    )
+    _assert_hs_orthonormal(qcqp)
+
+    # (3) Merging leading constraints preserves the dual (multiplier is rescaled).
+    dual = qcqp.get_dual(qcqp.current_lags)[0]
+    qcqp.merge_lead_constraints(merged_num=2, metric="hilbert_schmidt")
+    assert np.isclose(dual, qcqp.get_dual(qcqp.current_lags)[0], rtol=1e-6, atol=1e-6), (
+        "HS merge_lead_constraints changed the dual value"
+    )
+    _assert_hs_orthonormal(qcqp)
+
+
+def test_hs_invariants_sparse(sparse_qcqp_data):
+    """HS ortho/add/merge preserve the dual + orthonormality (sparse)."""
+    _check_hs_invariants(sparse_qcqp_data["qcqp"])
+
+
+def test_hs_invariants_dense(dense_qcqp_data):
+    """HS ortho/add/merge preserve the dual + orthonormality (dense)."""
+    _check_hs_invariants(dense_qcqp_data["qcqp"])
+
+
+def test_hs_orthonormalization_general_projectors():
+    """HS orthonormalization works for general (non-diagonal) projectors and
+    handles an HS-dependent projector via the ridge fallback."""
+    n = 5
+    rng = np.random.default_rng(3)
+    # Full-support rank-1 Hermitian projectors P = v v^H.
+    vs = [rng.standard_normal(n) + 1j * rng.standard_normal(n) for _ in range(4)]
+    Projlist = [sp.csc_array(np.outer(v, v.conj())) for v in vs]
+    # A deliberately dependent projector (duplicate) exercises the ridge fallback.
+    Projlist.append(sp.csc_array(np.outer(vs[0], vs[0].conj())))
+    Pstruct = sp.csc_array(np.ones((n, n), dtype=complex))
+
+    A0 = sp.csc_array(sp.eye_array(n, format="csc") * 2.0)
+    A1 = sp.eye_array(n, format="csc")
+    A2 = sp.eye_array(n, format="csc")
+    s0 = rng.standard_normal(n) + 1j * rng.standard_normal(n)
+    s1 = rng.standard_normal(n) + 1j * rng.standard_normal(n)
+    qcqp = SparseSharedProjQCQP(A0, s0, 0.0, A1, A2, s1, Projlist, Pstruct, verbose=0)
+
+    lags = _interior_feasible_lags(qcqp)
+    qcqp.current_lags = lags.copy()
+    dual_before = qcqp.get_dual(lags)[0]
+    gcd._orthonormalize_hs(qcqp)
+    dual_after = qcqp.get_dual(qcqp.current_lags)[0]
+    assert np.isclose(dual_before, dual_after, rtol=1e-6, atol=1e-7)
+
+
+def test_run_gcd_hilbert_schmidt_runs(sparse_qcqp_data):
+    """run_gcd with the HS metric runs end-to-end and yields a finite bound."""
+    params = GCDHyperparameters(
+        ortho_metric="hilbert_schmidt",
+        max_gcd_iter_num=6,
+        max_proj_cstrt_num=6,
+        gcd_iter_period=5,
+        gcd_tol=1e-3,
+    )
+    qcqp = sparse_qcqp_data["qcqp"]
+    qcqp.run_gcd(params)
+    assert qcqp.current_dual is not None and np.isfinite(qcqp.current_dual)
+
+
+def test_invalid_ortho_metric_raises():
+    """An unknown ortho_metric is rejected at construction time."""
+    with pytest.raises(ValueError, match="ortho_metric"):
+        GCDHyperparameters(ortho_metric="bogus")

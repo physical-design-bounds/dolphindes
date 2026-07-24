@@ -13,7 +13,7 @@ from dolphindes.util import Projectors, Sym
 from .optimization import BFGS, Alt_Newton_GD, OptimizationHyperparameters, _Optimizer
 
 if TYPE_CHECKING:
-    from .gcd import GCDHyperparameters
+    from .gcd import GCDHyperparameters, OrthoMetric
 
 
 class _SharedProjQCQP(ABC):
@@ -808,7 +808,9 @@ class _SharedProjQCQP(ABC):
             self.current_xstar,
         )
 
-    def merge_lead_constraints(self, merged_num: int = 2) -> None:
+    def merge_lead_constraints(
+        self, merged_num: int = 2, metric: "OrthoMetric" = "euclidean"
+    ) -> None:
         """
         Merge first 'merged_num' projector constraints into one (GCD utility).
 
@@ -816,13 +818,19 @@ class _SharedProjQCQP(ABC):
         ----------
         merged_num : int, default 2
             Number of leading projector constraints to merge.
+        metric : str, default "euclidean"
+            Normalization metric for the merged constraint ("euclidean" or
+            "hilbert_schmidt"); see the module-level ``gcd.merge_lead_constraints``.
         """
         from . import gcd as _gcd
 
-        _gcd.merge_lead_constraints(self, merged_num=merged_num)
+        _gcd.merge_lead_constraints(self, merged_num=merged_num, metric=metric)
 
     def add_constraints(
-        self, added_Pdata_list: list[ComplexArray], orthonormalize: bool = True
+        self,
+        added_Pdata_list: list[ComplexArray],
+        orthonormalize: bool = True,
+        metric: "OrthoMetric" = "euclidean",
     ) -> None:
         """
         Append additional projector constraints.
@@ -833,11 +841,17 @@ class _SharedProjQCQP(ABC):
             List of new projector diagonals.
         orthonormalize : bool, default True
             Whether to orthonormalize constraint set after insertion.
+        metric : str, default "euclidean"
+            Orthonormalization metric ("euclidean" or "hilbert_schmidt"); see
+            :func:`dolphindes.cvxopt.gcd.add_constraints`.
         """
         from . import gcd as _gcd
 
         _gcd.add_constraints(
-            self, added_Pdata_list=added_Pdata_list, orthonormalize=orthonormalize
+            self,
+            added_Pdata_list=added_Pdata_list,
+            orthonormalize=orthonormalize,
+            metric=metric,
         )
 
     def run_gcd(
