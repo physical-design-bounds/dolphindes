@@ -203,6 +203,11 @@ class _SharedProjQCQP(ABC):
         self._factor_cache: "OrderedDict[bytes, Tuple[Any, Any]]" = OrderedDict()
         self._factor_cache_maxsize = 2
 
+        # Cached HS-metric kernels (L, K, N) for gcd's closed-form constraint
+        # inner products, built lazily by gcd._hs_kernels. Depends only on
+        # (A1, A2, s1, Pstruct), which are fixed after construction.
+        self._hs_kernel_cache: Optional[Tuple[Any, Any, Any]] = None
+
         if self.use_precomp:
             self.compute_precomputed_values()
 
@@ -809,7 +814,7 @@ class _SharedProjQCQP(ABC):
         )
 
     def merge_lead_constraints(
-        self, merged_num: int = 2, metric: "OrthoMetric" = "euclidean"
+        self, merged_num: int = 2, metric: "OrthoMetric" = "hilbert_schmidt"
     ) -> None:
         """
         Merge first 'merged_num' projector constraints into one (GCD utility).
@@ -818,9 +823,9 @@ class _SharedProjQCQP(ABC):
         ----------
         merged_num : int, default 2
             Number of leading projector constraints to merge.
-        metric : str, default "euclidean"
-            Normalization metric for the merged constraint ("euclidean" or
-            "hilbert_schmidt"); see the module-level ``gcd.merge_lead_constraints``.
+        metric : str, default "hilbert_schmidt"
+            Normalization metric for the merged constraint ("hilbert_schmidt" or
+            "euclidean"); see the module-level ``gcd.merge_lead_constraints``.
         """
         from . import gcd as _gcd
 
@@ -830,7 +835,7 @@ class _SharedProjQCQP(ABC):
         self,
         added_Pdata_list: list[ComplexArray],
         orthonormalize: bool = True,
-        metric: "OrthoMetric" = "euclidean",
+        metric: "OrthoMetric" = "hilbert_schmidt",
     ) -> None:
         """
         Append additional projector constraints.
@@ -841,8 +846,8 @@ class _SharedProjQCQP(ABC):
             List of new projector diagonals.
         orthonormalize : bool, default True
             Whether to orthonormalize constraint set after insertion.
-        metric : str, default "euclidean"
-            Orthonormalization metric ("euclidean" or "hilbert_schmidt"); see
+        metric : str, default "hilbert_schmidt"
+            Orthonormalization metric ("hilbert_schmidt" or "euclidean"); see
             :func:`dolphindes.cvxopt.gcd.add_constraints`.
         """
         from . import gcd as _gcd

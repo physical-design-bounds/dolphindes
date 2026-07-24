@@ -27,6 +27,13 @@ from dolphindes.util import CRdot, Sym
 OrthoMetric = Literal["euclidean", "hilbert_schmidt"]
 
 
+def _validate_metric(metric: str, param: str = "metric") -> None:
+    """Raise ValueError if ``metric`` is not a supported :data:`OrthoMetric`."""
+    valid = get_args(OrthoMetric)
+    if metric not in valid:
+        raise ValueError(f"{param} must be one of {valid}, got {metric!r}.")
+
+
 def _frob_inner(A: Any, B: Any) -> float:
     """Real Frobenius inner product Re tr(A^H B) for dense or sparse A, B.
 
@@ -121,9 +128,10 @@ def _hs_kernels(
     with ``(.)`` the elementwise product. Only projector diagonals on
     ``Pstruct``'s support enter, so the kernels are restricted to those rows/cols
     to match the ``(nnz, k)`` layout of ``Projectors.get_Pdata_column_stack``.
-    ``(A1, A2, s1, Pstruct)`` are constant over a GCD run, so the result is cached.
+    ``(A1, A2, s1, Pstruct)`` are constant after construction, so the result is
+    cached on the QCQP.
     """
-    cached = getattr(QCQP, "_hs_kernel_cache", None)
+    cached = QCQP._hs_kernel_cache
     if cached is not None:
         return cast("tuple[SparseDense, SparseDense, SparseDense]", cached)
 
@@ -151,8 +159,23 @@ def _hs_kernels(
 
     ix = QCQP.Proj.Pstruct.indices
     kernels = (_restrict(L, ix), _restrict(K, ix), _restrict(N, ix))
-    QCQP._hs_kernel_cache = kernels  # type: ignore[attr-defined]
+    QCQP._hs_kernel_cache = kernels
     return kernels
+
+
+def _hs_inner_diag(QCQP: _SharedProjQCQP, p: ComplexArray, q: ComplexArray) -> float:
+    """Kernel form of the HS inner product between two projector diagonals.
+
+    Equal to :func:`_hs_inner` on the constraint operators built from ``p`` and
+    ``q`` (in ``get_Pdata_column_stack`` layout), without constructing them.
+    Only valid when :func:`_hs_analytic_available`.
+    """
+    L, K, N = _hs_kernels(QCQP)
+    return float(
+        0.5 * np.real(p @ (L @ q))
+        + 0.5 * np.real(p.conj() @ (K @ q))
+        + np.real(p @ (N @ q.conj()))
+    )
 
 
 def _constraint_ops(
@@ -255,29 +278,20 @@ def _orthonormalize_new_hs_analytic(
     """Run modified Gram-Schmidt on new constraints in the HS metric.
 
     Same result as the operator-based :func:`_orthonormalize_new_hs`, but the
-    inner products run on the projector diagonals via the kernels (``hs_inner``
-    below) so no ``A_k`` are built. Assumes the existing constraints are already
-    HS-orthonormal, as GCD maintains; only valid when :func:`_hs_analytic_available`.
+    inner products run on the projector diagonals via the kernels
+    (:func:`_hs_inner_diag`) so no ``A_k`` are built. Assumes the existing
+    constraints are already HS-orthonormal, as GCD maintains; only valid when
+    :func:`_hs_analytic_available`.
     """
-    L, K, N = _hs_kernels(QCQP)
-
-    def hs_inner(p: ComplexArray, q: ComplexArray) -> float:
-        """Kernel form of the HS inner product between two projector diagonals."""
-        return float(
-            0.5 * np.real(p @ (L @ q))
-            + 0.5 * np.real(p.conj() @ (K @ q))
-            + np.real(p @ (N @ q.conj()))
-        )
-
     existing = QCQP.Proj.get_Pdata_column_stack()  # (nnz, n_proj_constr)
     basis = [existing[:, j] for j in range(existing.shape[1])]
 
     for m in range(len(added_Pdata_list)):
         a = np.array(added_Pdata_list[m], dtype=complex)
-        init_norm_sq = hs_inner(a, a)
+        init_norm_sq = _hs_inner_diag(QCQP, a, a)
         for q in basis:
-            a = a - hs_inner(q, a) * q
-        norm_sq = hs_inner(a, a)
+            a = a - _hs_inner_diag(QCQP, q, a) * q
+        norm_sq = _hs_inner_diag(QCQP, a, a)
         if norm_sq > 1e-14 * max(init_norm_sq, 1.0):
             a = a / np.sqrt(norm_sq)
         # else: the constraint is (numerically) already in the span, so the
@@ -305,7 +319,7 @@ def _orthonormalize_new_hs(
     ]
 
     for m in range(len(added_Pdata_list)):
-        a = added_Pdata_list[m]
+        a = np.array(added_Pdata_list[m], dtype=complex)
         A_a, F_a = _constraint_ops_for_data(QCQP, a)
         init_norm_sq = _hs_inner((A_a, F_a), (A_a, F_a))
         for q_data, q_ops in basis:
@@ -322,6 +336,7 @@ def _orthonormalize_new_hs(
         # else: the constraint is (numerically) already in the span, so the
         # residual is an ~zero operator. Leaving it un-normalized keeps it inert
         # (it enters with a ~zero gradient and stays at multiplier 0).
+        added_Pdata_list[m] = a
         basis.append((a.copy(), (A_a, F_a)))
 
 
@@ -336,12 +351,11 @@ class GCDHyperparameters:
     orthonormalize : bool
         Whether to keep projector constraints orthonormalized.
     ortho_metric : str
-        Inner product used for orthonormalization. Either ``"euclidean"`` (the
-        default: orthonormalize the raw projector data ``vec(P_j)``) or
-        ``"hilbert_schmidt"`` (orthonormalize the constraints themselves, in the
-        augmented Hilbert-Schmidt metric that reflects how each constraint enters
-        the dual). See :func:`_hs_gram_matrix`. Ignored if ``orthonormalize`` is
-        False.
+        Inner product used for orthonormalization. Either ``"hilbert_schmidt"``
+        (the default: orthonormalize the constraints themselves, in the augmented
+        Hilbert-Schmidt metric that reflects how each constraint enters the dual)
+        or ``"euclidean"`` (orthonormalize the raw projector data ``vec(P_j)``).
+        See :func:`_hs_gram_matrix`. Ignored if ``orthonormalize`` is False.
     opt_params : OptimizationHyperparameters | None
         Optimization hyperparameters used for the internal dual solve at each GCD
         iteration. If None, GCD uses defaults suitable for frequent re-solves
@@ -364,11 +378,7 @@ class GCDHyperparameters:
 
     def __post_init__(self) -> None:
         """Validate that ortho_metric is one of the supported metrics."""
-        valid = get_args(OrthoMetric)
-        if self.ortho_metric not in valid:
-            raise ValueError(
-                f"ortho_metric must be one of {valid}, got {self.ortho_metric!r}."
-            )
+        _validate_metric(self.ortho_metric, param="ortho_metric")
 
 
 def merge_lead_constraints(
@@ -386,17 +396,20 @@ def merge_lead_constraints(
     merged_num : int (optional, default 2)
         Number of leading constraints that we are merging together; must be at least 2.
     metric : str, optional
-        Metric used to normalize the merged constraint. ``"euclidean"`` (default)
-        normalizes by the projector-data norm; ``"hilbert_schmidt"`` normalizes by
-        the constraint's HS norm, which keeps the constraint set HS-orthonormal
-        when GCD runs with ``ortho_metric="hilbert_schmidt"``. The choice does not
-        affect the dual value (the multiplier is rescaled to compensate).
+        Metric used to normalize the merged constraint. ``"hilbert_schmidt"``
+        (default) normalizes by the constraint's HS norm, which keeps the
+        constraint set HS-orthonormal when GCD runs with
+        ``ortho_metric="hilbert_schmidt"``; ``"euclidean"`` normalizes by the
+        projector-data norm. The choice does not affect the dual value (the
+        multiplier is rescaled to compensate).
 
     Raises
     ------
     ValueError
-        If merged_num < 2 or if there are insufficient constraints for merging.
+        If merged_num < 2, if there are insufficient constraints for merging, or
+        if metric is not a supported orthonormalization metric.
     """
+    _validate_metric(metric)
     proj_cstrt_num = len(QCQP.Proj)
     if merged_num < 2:
         raise ValueError("Need at least 2 constraints for merging.")
@@ -416,8 +429,12 @@ def merge_lead_constraints(
     # multiplier below is set to compensate); the HS norm additionally keeps the
     # constraint set HS-orthonormal for ortho_metric="hilbert_schmidt".
     if metric == "hilbert_schmidt":
-        merged_ops = _constraint_ops(QCQP, new_P)
-        Pnorm = np.sqrt(_hs_inner(merged_ops, merged_ops))
+        if _hs_analytic_available(QCQP):
+            merged_diag = new_P.diagonal()[QCQP.Proj.Pstruct.indices]
+            Pnorm = np.sqrt(_hs_inner_diag(QCQP, merged_diag, merged_diag))
+        else:
+            merged_ops = _constraint_ops(QCQP, new_P)
+            Pnorm = np.sqrt(_hs_inner(merged_ops, merged_ops))
     else:
         Pnorm = la.norm(new_P.data)
     new_P /= Pnorm
@@ -454,7 +471,7 @@ def add_constraints(
     QCQP: _SharedProjQCQP,
     added_Pdata_list: list[ComplexArray],
     orthonormalize: bool = True,
-    metric: OrthoMetric = "euclidean",
+    metric: OrthoMetric = "hilbert_schmidt",
 ) -> None:
     """
     Add new shared projection constraints into an existing QCQP.
@@ -469,10 +486,11 @@ def add_constraints(
     orthonormalize : bool, optional
         If true, assume that QCQP has orthonormal constraints and keeps it that way
     metric : str, optional
-        Metric for orthonormalization: ``"euclidean"`` (default) uses the
-        projector-data inner product; ``"hilbert_schmidt"`` uses the augmented
-        HS metric on the constraints. Only used when ``orthonormalize`` is True.
+        Metric for orthonormalization: ``"hilbert_schmidt"`` (default) uses the
+        augmented HS metric on the constraints; ``"euclidean"`` uses the
+        projector-data inner product. Only used when ``orthonormalize`` is True.
     """
+    _validate_metric(metric)
     x_size = QCQP.Proj.Pstruct.size
     proj_cstrt_num = QCQP.n_proj_constr
     added_Pdata_num = len(added_Pdata_list)

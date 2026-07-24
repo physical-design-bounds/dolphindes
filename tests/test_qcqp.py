@@ -761,16 +761,15 @@ def test_hs_invariants_dense(dense_qcqp_data):
     _check_hs_invariants(dense_qcqp_data["qcqp"])
 
 
-def test_hs_orthonormalization_general_projectors():
-    """HS orthonormalization works for general (non-diagonal) projectors and
-    handles an HS-dependent projector via the ridge fallback."""
-    n = 5
-    rng = np.random.default_rng(3)
-    # Full-support rank-1 Hermitian projectors P = v v^H.
+def _general_projector_qcqp(with_duplicate=False, n=5, seed=3):
+    """A sparse QCQP with full-support rank-1 (non-diagonal) projectors, on which
+    ``_hs_analytic_available`` is False so the operator-based HS paths run.
+    Optionally appends a duplicate projector to make the set HS-dependent."""
+    rng = np.random.default_rng(seed)
     vs = [rng.standard_normal(n) + 1j * rng.standard_normal(n) for _ in range(4)]
     Projlist = [sp.csc_array(np.outer(v, v.conj())) for v in vs]
-    # A deliberately dependent projector (duplicate) exercises the ridge fallback.
-    Projlist.append(sp.csc_array(np.outer(vs[0], vs[0].conj())))
+    if with_duplicate:
+        Projlist.append(sp.csc_array(np.outer(vs[0], vs[0].conj())))
     Pstruct = sp.csc_array(np.ones((n, n), dtype=complex))
 
     A0 = sp.csc_array(sp.eye_array(n, format="csc") * 2.0)
@@ -778,7 +777,21 @@ def test_hs_orthonormalization_general_projectors():
     A2 = sp.eye_array(n, format="csc")
     s0 = rng.standard_normal(n) + 1j * rng.standard_normal(n)
     s1 = rng.standard_normal(n) + 1j * rng.standard_normal(n)
-    qcqp = SparseSharedProjQCQP(A0, s0, 0.0, A1, A2, s1, Projlist, Pstruct, verbose=0)
+    return SparseSharedProjQCQP(A0, s0, 0.0, A1, A2, s1, Projlist, Pstruct, verbose=0)
+
+
+def test_hs_invariants_general_projectors():
+    """HS ortho/add/merge preserve the dual + orthonormality for general
+    (non-diagonal) projectors, i.e. through the operator-based paths."""
+    qcqp = _general_projector_qcqp()
+    assert not gcd._hs_analytic_available(qcqp)
+    _check_hs_invariants(qcqp)
+
+
+def test_hs_orthonormalization_ridge_fallback():
+    """An HS-dependent projector set (duplicate constraint) exercises the ridge
+    fallback in _orthonormalize_hs, and the dual is still preserved."""
+    qcqp = _general_projector_qcqp(with_duplicate=True)
 
     lags = _interior_feasible_lags(qcqp)
     qcqp.current_lags = lags.copy()
@@ -879,3 +892,21 @@ def test_invalid_ortho_metric_raises():
     """An unknown ortho_metric is rejected at construction time."""
     with pytest.raises(ValueError, match="ortho_metric"):
         GCDHyperparameters(ortho_metric="bogus")
+
+
+def test_invalid_metric_raises(sparse_qcqp_data):
+    """A typo'd metric in add/merge raises instead of silently running the
+    euclidean path, and leaves the QCQP unmodified."""
+    qcqp = sparse_qcqp_data["qcqp"]
+    qcqp.current_lags = _interior_feasible_lags(qcqp)
+    n_before = qcqp.n_proj_constr
+    lags_before = qcqp.current_lags.copy()
+
+    nnz = qcqp.Proj.Pstruct.size
+    with pytest.raises(ValueError, match="metric"):
+        qcqp.add_constraints([np.ones(nnz, dtype=complex)], metric="hs")
+    with pytest.raises(ValueError, match="metric"):
+        qcqp.merge_lead_constraints(merged_num=2, metric="hilbert-schmidt")
+
+    assert qcqp.n_proj_constr == n_before
+    assert np.array_equal(qcqp.current_lags, lags_before)
