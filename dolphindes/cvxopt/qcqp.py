@@ -357,8 +357,18 @@ class DenseSharedProjQCQP(_SharedProjQCQP):
         -------
         ComplexArray
             Solution x = A^{-1} b.
+
+        Notes
+        -----
+        ``check_finite`` is disabled because it rescans the whole n^2 factor on
+        every call, which nearly doubles the cost of a solve. The factor comes from
+        ``_factorize``, where ``cho_factor`` does validate, so non-finite values
+        are still caught once per factorization rather than once per solve -- and
+        this is called hundreds of times per factorization.
         """
-        return cast(ComplexArray, la.cho_solve(self.Acho, b))
+        return cast(
+            ComplexArray, la.cho_solve(self.Acho, b, check_finite=False)
+        )
 
     def is_dual_feasible(self, lags: FloatNDArray) -> bool:
         """
