@@ -117,3 +117,50 @@ def test_newton_optimum(_optimization_setup: Dict[str, Any]) -> None:
     assert np.allclose(
         fx, setup["optfunc"](setup["analytical_solution"])[0], atol=setup["opttol"]
     )
+
+
+def _bfgs_for_update() -> BFGS:
+    """A BFGS instance for calling _update_Hinv directly (its callables are unused)."""
+    return BFGS(
+        lambda x, **kwargs: (0.0, np.zeros_like(x), None, None),
+        lambda x: True,
+        lambda x: (np.zeros_like(x), None),
+        True,
+        OptimizationHyperparameters(),
+    )
+
+
+def test_bfgs_update_keeps_small_scale_curvature() -> None:
+    """A genuine curvature pair at a small scale still updates Hinv.
+
+    With a small objective and short steps, gamma @ delta is far below any absolute
+    threshold (here ~1e-18) while the curvature it measures is real: the update must
+    still satisfy the equation Hinv_new @ gamma = delta.
+    """
+    rng = np.random.default_rng(1)
+    n = 6
+    H = 1e-8 * _generate_psd_matrix(n, cond_number=10)
+    delta = 1e-5 * rng.standard_normal(n)
+    gamma = H @ delta
+    assert 0 < gamma @ delta < 1e-15
+
+    Hinv = np.eye(n)
+    new_Hinv = _bfgs_for_update()._update_Hinv(Hinv, gamma, np.zeros(n), delta)
+
+    assert not np.allclose(new_Hinv, Hinv)
+    assert np.allclose(new_Hinv @ gamma, delta, rtol=1e-8, atol=0)
+
+
+@pytest.mark.parametrize(
+    "gamma, delta",
+    [
+        (np.array([1.0, -2.0, 0.5]), np.zeros(3)),  # the step did not move x
+        (np.array([1.0, 0.0, 0.0]), np.array([-1.0, 0.0, 0.0])),  # negative curvature
+        (np.array([np.nan, 0.0, 0.0]), np.array([1.0, 0.0, 0.0])),  # NaN gradient
+    ],
+)
+def test_bfgs_update_skips_degenerate_pairs(gamma, delta) -> None:
+    """Pairs without positive curvature leave Hinv as it was, never NaN."""
+    Hinv = np.diag([1.0, 2.0, 3.0])
+    new_Hinv = _bfgs_for_update()._update_Hinv(Hinv, gamma, np.zeros(3), delta)
+    assert np.array_equal(new_Hinv, Hinv)

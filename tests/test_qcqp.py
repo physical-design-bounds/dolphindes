@@ -1096,6 +1096,22 @@ def _real_sparse_qcqp_for_assembly(n=10, k=3, seed=8):
     )
 
 
+def test_is_dual_feasible_refuses_small_indefinite():
+    """A small indefinite A(lags) is infeasible, and a small PD one feasible.
+
+    CHOLMOD's "auto" analysis factors a matrix this small as a simplicial LDL^H,
+    which succeeds on an indefinite matrix; the supernodal analysis
+    SparseSharedProjQCQP uses raises instead.
+    """
+    qcqp = _sparse_qcqp_for_assembly(diagonal=True, n_gen=0)
+    d = np.random.default_rng(4).standard_normal(qcqp.get_number_constraints())
+    assert qcqp.is_dual_feasible(1e-3 * d)  # A0 = 3I dominates
+    t = 1.0
+    while np.linalg.eigvalsh(qcqp._get_total_A(t * d).toarray())[0] > -1.0:
+        t *= 2.0
+    assert not qcqp.is_dual_feasible(t * d)
+
+
 @pytest.mark.parametrize("diagonal", [True, False])
 @pytest.mark.parametrize("n_gen", [0, 2])
 def test_assembly_map_matches_elementwise_sum(diagonal, n_gen):

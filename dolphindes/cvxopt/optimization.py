@@ -353,7 +353,7 @@ class BFGS(_Optimizer):
             y_k = new_grad - old_grad (change in gradient)
             ρ = 1/(y_k^T*s_k)
 
-        The update is skipped if y_k^T*s_k is too small to avoid numerical instability.
+        The update is skipped unless y_k^T*s_k is positive relative to |y_k||s_k|.
         For quadratic functions, the inverse Hessian converges to the true inverse.
         """
         # The standard BFGS update formula for the inverse Hessian approximation.
@@ -365,12 +365,12 @@ class BFGS(_Optimizer):
         gamma = new_grad - old_grad  # Change in gradient
         gamma_dot_delta = gamma @ delta  # y_k^T * s_k
 
-        # Skip update if gamma_dot_delta is too small
-        # (avoid division by zero or numerical instability)
-        # if abs(gamma_dot_delta) < 1e-10:
-        #     if self.verbose >= 3:
-        #         print("Skipping Hinv update due to small gamma_dot_delta")
-        #     return Hinv
+        # Skip update if gamma_dot_delta is too small relative to |gamma||delta|
+        # (avoid division by zero or numerical instability); written so NaN skips too
+        if not gamma_dot_delta > 1e-10 * np.linalg.norm(gamma) * np.linalg.norm(delta):
+            if self.verbose >= 3:
+                print("Skipping Hinv update due to small gamma_dot_delta")
+            return Hinv
 
         # Standard BFGS update formula
         rho = 1.0 / gamma_dot_delta

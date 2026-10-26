@@ -178,7 +178,8 @@ class SparseSharedProjQCQP(_SharedProjQCQP):
                 f"analyzing A of format and shape {type(A)}, {A.shape} "
                 f"and # of nonzero elements '{A.nnz}"
             )
-        self._Acho_symbolic = sksparse.cholmod.analyze(A)
+        # must be supernodal so the positive definiteness check works.
+        self._Acho_symbolic = sksparse.cholmod.analyze(A, mode="supernodal")
         self.Acho = None
         return self._Acho_symbolic
 
@@ -268,10 +269,8 @@ class SparseSharedProjQCQP(_SharedProjQCQP):
         assert sp.issparse(A)
         A = sp.csc_array(A)
         try:
+            # supernodal LL^H (see _initialize_Acho): a non-PD matrix raises here
             factor = self._factorize(A)
-            # Accessing the factor forces the numeric decomposition to run, so a
-            # non-PD matrix raises here rather than lazily at solve time.
-            factor.L()
         except sksparse.cholmod.CholmodNotPositiveDefiniteError:
             return False
         # Feasible: cache the factor so the imminent get_dual at the same lags
