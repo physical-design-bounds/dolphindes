@@ -164,3 +164,35 @@ def test_bfgs_update_skips_degenerate_pairs(gamma, delta) -> None:
     Hinv = np.diag([1.0, 2.0, 3.0])
     new_Hinv = _bfgs_for_update()._update_Hinv(Hinv, gamma, np.zeros(3), delta)
     assert np.array_equal(new_Hinv, Hinv)
+
+
+def test_newton_reaches_far_minimizer_of_ill_conditioned_quadratic() -> None:
+    """Newton steps keep their length: a far, badly conditioned minimizer is cheap.
+
+    The minimizer of this quadratic lies 1e6 away along its flattest direction (the
+    Hessian's condition number is 1e8). The full Newton step reaches it at once
+    (~30 objective evaluations in all). A normalized direction whose step size is
+    grown by doubling would take a lot more.
+    """
+    n = 6
+    A = _generate_psd_matrix(n, cond_number=10**8)
+    flattest = np.linalg.eigh(A)[1][:, 0]
+    x_star = 1e6 * flattest
+    b = 2 * A @ x_star
+    calls = {"n": 0}
+
+    def optfunc(x, get_grad=False, get_hess=False, penalty_vectors=[]):
+        calls["n"] += 1
+        return float(x @ A @ x - b @ x), 2 * A @ x - b, 2 * A, 0
+
+    opt = Alt_Newton_GD(
+        optfunc,
+        lambda x: True,
+        lambda x: (np.zeros_like(x), None),
+        True,
+        OptimizationHyperparameters(opttol=1e-6, max_restart=1),
+    )
+    x, _, _, _ = opt.run(np.zeros(n))
+
+    assert np.allclose(x, x_star, rtol=1e-6, atol=1e-6 * np.linalg.norm(x_star))
+    assert calls["n"] <= 100
