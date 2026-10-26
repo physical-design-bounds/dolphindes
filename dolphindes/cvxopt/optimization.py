@@ -109,6 +109,11 @@ class _Optimizer:
         self.is_convex = is_convex
         self.opt_params = opt_params
         self.penalty_vector_list: list[FloatNDArray] = []
+        # (x, d) -> step along d to the PSD wall, or None if it cannot be estimated.
+        # If set, a first infeasible trial step jumps to just inside the wall.
+        self.wall_step_func: (
+            Callable[[FloatNDArray, FloatNDArray], float | None] | None
+        ) = None
 
         self.penalty_ratio = self.opt_params.penalty_ratio
 
@@ -177,7 +182,14 @@ class _Optimizer:
                 f"\nStarting line search with parameters "
                 f"alpha_start = {alpha_start}, alpha = {alpha}"
             )
+        wall_tried = False
         while not self.feasible_func(x0 + alpha * dir):
+            if not wall_tried and self.wall_step_func is not None:
+                wall_tried = True
+                wall = self.wall_step_func(x0, dir)
+                if wall is not None and 0.9 * wall < alpha:
+                    alpha = 0.9 * wall
+                    continue
             alpha *= c_reduct
         alpha_opt = alpha
         alpha_feas = alpha

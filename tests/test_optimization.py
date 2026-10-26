@@ -196,3 +196,33 @@ def test_newton_reaches_far_minimizer_of_ill_conditioned_quadratic() -> None:
 
     assert np.allclose(x, x_star, rtol=1e-6, atol=1e-6 * np.linalg.norm(x_star))
     assert calls["n"] <= 100
+
+
+@pytest.mark.parametrize("wall, expected_checks", [(1.0, [100.0, 0.9]), (None, None)])
+def test_line_search_jumps_to_the_wall(wall, expected_checks) -> None:
+    """After a first infeasible trial step, the line search tries 0.9x the wall
+    distance wall_step_func reports, instead of shrinking the step 0.7x at a time;
+    without an estimate (None) it shrinks as before."""
+    checks = []
+
+    def feasible(x):
+        checks.append(float(x[0]))
+        return bool(x[0] < 1.0)  # the wall is 1 away along +x
+
+    opt = Alt_Newton_GD(
+        lambda x, **kwargs: (float(-x[0]), None, None, None),
+        feasible,
+        lambda x: (np.zeros_like(x), None),
+        True,
+        OptimizationHyperparameters(),
+    )
+    opt.wall_step_func = lambda x, d: wall
+    x0, d = np.zeros(1), np.ones(1)
+    alpha_opt, alpha_feas = opt._line_search(d, x0, 0.0, -d, 100.0)
+
+    if expected_checks is not None:
+        assert checks == expected_checks
+        assert alpha_feas == alpha_opt == 0.9
+    else:
+        assert len(checks) > 10
+        assert np.isclose(alpha_feas, 100.0 * 0.7 ** (len(checks) - 1))
