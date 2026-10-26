@@ -907,11 +907,11 @@ class _SharedProjQCQP(ABC):
         Returns
         -------
         current_dual : float
-            Optimal dual value.
+            Smallest dual value found, without the PSD-boundary penalties.
         current_lags : FloatNDArray
-            Optimal Lagrange multipliers.
+            Lagrange multipliers where the optimizer stopped.
         current_grad : FloatNDArray
-            Gradient at optimum.
+            Gradient at current_lags.
         current_hess : FloatNDArray | None
             Hessian (if computed by Newton variant).
         current_xstar : ComplexArray
@@ -935,7 +935,20 @@ class _SharedProjQCQP(ABC):
             init_lags = self.find_feasible_lags()
         init_lags = np.array(init_lags, float)
 
-        optfunc = self.get_dual
+        best_dual = np.inf
+
+        def optfunc(
+            lags: FloatNDArray,
+            get_grad: bool = False,
+            get_hess: bool = False,
+            penalty_vectors: Optional[list[ComplexArray]] = None,
+        ) -> Tuple[float, Optional[FloatNDArray], Optional[FloatNDArray], Any]:
+            # Track the smallest dual without penalties over every evaluation.
+            nonlocal best_dual
+            out = self.get_dual(lags, get_grad, get_hess, penalty_vectors)
+            best_dual = min(best_dual, out[3].dualval_real)
+            return out
+
         feasibility_func = self.is_dual_feasible
         penalty_vector_func = self._get_PSD_penalty
 
@@ -954,9 +967,10 @@ class _SharedProjQCQP(ABC):
                 "Use newton or bfgs."
             )
 
-        self.current_lags, self.current_dual, self.current_grad, self.current_hess = (
-            optimizer.run(init_lags)
+        self.current_lags, _, self.current_grad, self.current_hess = optimizer.run(
+            init_lags
         )
+        self.current_dual = best_dual
         self.current_xstar = self._get_xstar(self.current_lags)[0]
 
         return (

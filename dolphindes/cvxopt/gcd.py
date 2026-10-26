@@ -665,6 +665,7 @@ def run_gcd(
     ## gcd loop
     gcd_iter_num = 0
     gcd_prev_dual: float = np.inf
+    gcd_best_dual: float = np.inf
     while True:
         gcd_iter_num += 1
         # solve current dual problem
@@ -676,6 +677,9 @@ def run_gcd(
         )
         assert QCQP.current_dual is not None
         assert QCQP.current_xstar is not None
+
+        gcd_best_dual = min(gcd_best_dual, QCQP.current_dual)
+        QCQP.current_dual = gcd_best_dual
 
         print(
             f"At GCD iteration #{gcd_iter_num}, best dual bound found is \

@@ -15,6 +15,7 @@ import scipy.sparse as sp
 from dolphindes.cvxopt import (
     DenseSharedProjQCQP,
     GCDHyperparameters,
+    OptimizationHyperparameters,
     SparseSharedProjQCQP,
     gcd,
 )
@@ -847,6 +848,67 @@ def test_run_gcd_inner_solve_method(sparse_qcqp_data, monkeypatch, method, expec
 
     assert seen and set(seen) == {expected}
     assert qcqp.current_dual is not None and np.isfinite(qcqp.current_dual)
+
+
+@pytest.mark.parametrize("method", ["bfgs", "newton"])
+def test_solve_dual_reports_smallest_dual_without_penalties(
+    sparse_qcqp_data, monkeypatch, method
+):
+    """current_dual is the smallest penalty-free dual over every evaluation, so it is
+    never above the dual where the optimizer stopped.
+
+    Uses run_gcd's inner-solve settings (one penalty level, max_restart=1), under
+    which the optimizer stops with its PSD-boundary penalties still active.
+    """
+    qcqp = sparse_qcqp_data["qcqp"]
+    seen = []
+    original = type(qcqp).get_dual
+
+    def spy(self, *args, **kwargs):
+        out = original(self, *args, **kwargs)
+        seen.append(out[3].dualval_real)
+        return out
+
+    opt_params = OptimizationHyperparameters(
+        opttol=1e-2,
+        min_inner_iter=5,
+        max_restart=1,
+        penalty_ratio=1e-2,
+        penalty_reduction=0.1,
+        break_iter_period=20,
+    )
+    init_lags = qcqp.find_feasible_lags()
+    monkeypatch.setattr(type(qcqp), "get_dual", spy)
+    qcqp.solve_current_dual_problem(method, init_lags=init_lags, opt_params=opt_params)
+    monkeypatch.undo()
+
+    assert qcqp.current_dual == min(seen)
+    assert qcqp.current_dual <= qcqp.get_dual(qcqp.current_lags)[0]
+
+
+def test_run_gcd_reported_bound_never_increases(sparse_qcqp_data, monkeypatch):
+    """The bound run_gcd reports after each iteration is the smallest so far."""
+    params = GCDHyperparameters(
+        max_gcd_iter_num=8,
+        max_proj_cstrt_num=6,
+        gcd_iter_period=5,
+        gcd_tol=1e-3,
+        method="bfgs",
+    )
+    np.random.seed(3)
+    qcqp = sparse_qcqp_data["qcqp"]
+    reported = []
+    original = type(qcqp).add_constraints
+
+    def spy(self, *args, **kwargs):
+        reported.append(self.current_dual)
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(type(qcqp), "add_constraints", spy)
+    qcqp.run_gcd(params)
+
+    assert len(reported) >= 2
+    assert all(b <= a for a, b in zip(reported, reported[1:]))
 
 
 def test_minAeig_constraint_raises_smallest_eigenvalue(sparse_qcqp_data):

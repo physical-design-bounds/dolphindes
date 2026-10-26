@@ -16,6 +16,11 @@ while we're pre-1.0, the public API may still change between minor releases.
 - **New:** `GCDHyperparameters(method=...)` selects the optimizer GCD uses for its
   inner dual solve, `"newton"` (the default, unchanged behaviour) or `"bfgs"`. This
   was previously hardcoded.
+- **Fixed:** `solve_current_dual_problem` returned the dual *plus* the PSD-boundary
+  penalties at the point where the optimizer stopped, and `run_gcd` reported and
+  tested convergence on that value. With GCD's single penalty level it sat up to 0.5%
+  above the smallest dual already evaluated, more than `gcd_tol`, so the reported
+  bound could rise between iterations and GCD stopped whenever it did.
 
 ## [0.2.2] — 2026-07-29
 
