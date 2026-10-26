@@ -957,6 +957,7 @@ class _SharedProjQCQP(ABC):
             optimizer = Alt_Newton_GD(
                 optfunc, feasibility_func, penalty_vector_func, is_convex, opt_params
             )
+            optimizer.wall_step_func = self._wall_step
         elif method == "bfgs":
             optimizer = BFGS(
                 optfunc, feasibility_func, penalty_vector_func, is_convex, opt_params
@@ -980,6 +981,46 @@ class _SharedProjQCQP(ABC):
             self.current_hess,
             self.current_xstar,
         )
+
+    def _wall_step(self, lags: FloatNDArray, d: FloatNDArray) -> Optional[float]:
+        """Return the step t along d at which A(lags + t d) stops being PD.
+
+        A is affine in the lags, A(lags + t d) = A + t B with B = A(lags + d) - A, so it
+        first becomes singular at t = -1/mu for the most negative eigenvalue mu of
+        A^-1 B, which ARPACK finds through the factor of A (cached, as the optimizer
+        has just evaluated at lags) at one solve per iteration. A loose tolerance is
+        enough: the line search jumps to 0.9 t.
+
+        Returns inf if no eigenvalue is negative, and None if ARPACK has not converged
+        or the problem is too small for it.
+
+        This means the dual solver, if stepping outside the feasibility region, can
+        immediately step back just before the wall without doing a line search, saving
+        on a large fraction of the positive-definiteness checks.
+        """
+        A, _ = self._get_factorization(lags)
+        B = self._get_total_A(lags + d) - A
+        n = A.shape[0]
+        if n < 3:  # ARPACK needs k + 1 < ncv <= n
+            return None
+        op = spla.LinearOperator(
+            A.shape, matvec=lambda x: self._Acho_solve(B @ x), dtype=complex
+        )
+        rng = np.random.default_rng(0)
+        v0 = rng.standard_normal(n) + 1j * rng.standard_normal(n)
+        try:
+            mu = spla.eigs(
+                op,
+                k=1,
+                which="SR",
+                ncv=min(10, n),
+                tol=1e-3,
+                v0=v0,
+                return_eigenvectors=False,
+            )[0].real
+        except spla.ArpackNoConvergence:
+            return None
+        return np.inf if mu >= 0 else -1.0 / mu
 
     def merge_lead_constraints(
         self, merged_num: int = 2, metric: "OrthoMetric" = "hilbert_schmidt"

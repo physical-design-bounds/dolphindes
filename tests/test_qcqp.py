@@ -10,6 +10,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+import scipy.linalg as la
 import scipy.sparse as sp
 
 from dolphindes.cvxopt import (
@@ -1094,6 +1095,27 @@ def _real_sparse_qcqp_for_assembly(n=10, k=3, seed=8):
         Pstruct,
         verbose=0,
     )
+
+
+@pytest.mark.parametrize("seed", [0, 1, 2])
+def test_wall_step_finds_psd_boundary(seed):
+    """_wall_step gives the step along d at which A(lags + t d) stops being positive
+    definite: the exact one, from the dense generalized eigenproblem, on a small QCQP."""
+    qcqp = _sparse_qcqp_for_assembly(diagonal=True, n_gen=0)
+    rng = np.random.default_rng(seed)
+    k = qcqp.get_number_constraints()
+    lags = 1e-3 * rng.standard_normal(k)  # A0 = 3I dominates: interior
+    d = rng.standard_normal(k)
+    A = qcqp._get_total_A(lags).toarray()
+    B = qcqp._get_total_A(lags + d).toarray() - A
+    mu = la.eigh(B, A, eigvals_only=True)[0]
+    assert mu < 0, "the test needs a direction that leaves the cone"
+
+    t = qcqp._wall_step(lags, d)
+
+    assert t is not None and np.isclose(t, -1.0 / mu, rtol=1e-2)
+    assert qcqp.is_dual_feasible(lags + 0.9 * t * d)
+    assert not qcqp.is_dual_feasible(lags + 1.1 * t * d)
 
 
 def test_is_dual_feasible_refuses_small_indefinite():
