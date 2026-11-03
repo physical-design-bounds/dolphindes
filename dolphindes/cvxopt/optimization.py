@@ -34,6 +34,10 @@ class OptimizationHyperparameters:
         Period of iterations for checking break conditions. Default: 50.
     verbose : int
         Verbosity level (0 = silent). Default: 0.
+    newton_alternate_above : float
+        Number of multipliers above which Newton (Alt_Newton_GD) alternates Newton
+        and gradient steps, both normalized with lengths learned from step to step,
+        instead of taking every Newton step at its own length.
     """
 
     opttol: float = 1e-2
@@ -44,6 +48,7 @@ class OptimizationHyperparameters:
     penalty_reduction: float = 0.1
     break_iter_period: int = 50
     verbose: int = 0
+    newton_alternate_above: float = 100
 
 
 class _Optimizer:
@@ -90,6 +95,10 @@ class _Optimizer:
     the results of the most recent optimization.
     """
 
+    # Accept the first step with sufficient (Armijo) decrease even on a convex
+    # problem, instead of backtracking on while the value still falls.
+    accept_sufficient_decrease = False
+
     def __init__(
         self,
         optfunc: Callable[..., Tuple[float, FloatNDArray, FloatNDArray, Any]],
@@ -105,6 +114,11 @@ class _Optimizer:
         self.is_convex = is_convex
         self.opt_params = opt_params
         self.penalty_vector_list: list[FloatNDArray] = []
+        # (x, d) -> step along d to the PSD wall, or None if it cannot be estimated.
+        # If set, a first infeasible trial step jumps to just inside the wall.
+        self.wall_step_func: (
+            Callable[[FloatNDArray, FloatNDArray], float | None] | None
+        ) = None
 
         self.penalty_ratio = self.opt_params.penalty_ratio
 
@@ -141,7 +155,7 @@ class _Optimizer:
         Parameters
         ----------
         dir : numpy.ndarray
-            The search direction vector, normalized to 1
+            The search direction: a unit vector, or the full Newton step
         x0 : numpy.ndarray
             The starting point for the line search
         fx0 : float
@@ -173,7 +187,14 @@ class _Optimizer:
                 f"\nStarting line search with parameters "
                 f"alpha_start = {alpha_start}, alpha = {alpha}"
             )
+        wall_tried = False
         while not self.feasible_func(x0 + alpha * dir):
+            if not wall_tried and self.wall_step_func is not None:
+                wall_tried = True
+                wall = self.wall_step_func(x0, dir)
+                if wall is not None and 0.9 * wall < alpha:
+                    alpha = 0.9 * wall
+                    continue
             alpha *= c_reduct
         alpha_opt = alpha
         alpha_feas = alpha
@@ -197,8 +218,10 @@ class _Optimizer:
                 alpha_opt = alpha
             else:
                 break
-            # Armijo backtracking condition if problem is not convex
-            if not self.is_convex and tmp_value <= fx0 + c_A * alpha * grad_direction:
+            # Armijo backtracking condition if problem is not convex, or if asked for
+            if (
+                not self.is_convex or self.accept_sufficient_decrease
+            ) and tmp_value <= fx0 + c_A * alpha * grad_direction:
                 alpha_opt = alpha
                 break
 
@@ -353,7 +376,7 @@ class BFGS(_Optimizer):
             y_k = new_grad - old_grad (change in gradient)
             ρ = 1/(y_k^T*s_k)
 
-        The update is skipped if y_k^T*s_k is too small to avoid numerical instability.
+        The update is skipped unless y_k^T*s_k is positive relative to |y_k||s_k|.
         For quadratic functions, the inverse Hessian converges to the true inverse.
         """
         # The standard BFGS update formula for the inverse Hessian approximation.
@@ -365,12 +388,12 @@ class BFGS(_Optimizer):
         gamma = new_grad - old_grad  # Change in gradient
         gamma_dot_delta = gamma @ delta  # y_k^T * s_k
 
-        # Skip update if gamma_dot_delta is too small
-        # (avoid division by zero or numerical instability)
-        # if abs(gamma_dot_delta) < 1e-10:
-        #     if self.verbose >= 3:
-        #         print("Skipping Hinv update due to small gamma_dot_delta")
-        #     return Hinv
+        # Skip update if gamma_dot_delta is too small relative to |gamma||delta|
+        # (avoid division by zero or numerical instability); written so NaN skips too
+        if not gamma_dot_delta > 1e-10 * np.linalg.norm(gamma) * np.linalg.norm(delta):
+            if self.verbose >= 3:
+                print("Skipping Hinv update due to small gamma_dot_delta")
+            return Hinv
 
         # Standard BFGS update formula
         rho = 1.0 / gamma_dot_delta
@@ -526,8 +549,13 @@ class Alt_Newton_GD(_Optimizer):
 
     Additional Features:
     ---------------------
-        - run() is implemented via alternating Newton and gradient descent steps;
-          alternating improves stability
+        - run() takes Newton steps at their own length: the full step is tried
+          first and the line search backs off from it. A normalized gradient
+          descent step is taken only when the Hessian cannot be solved.
+        - With more than opt_params.newton_alternate_above multipliers, run()
+          instead alternates Newton and gradient descent steps, both normalized and
+          with lengths learned from step to step, so that a Hessian is computed
+          only every other step.
         - _break_condition() is implemented to check for convergence
     """
 
@@ -642,7 +670,7 @@ class Alt_Newton_GD(_Optimizer):
     def run(
         self, x0: ArrayLike
     ) -> Tuple[FloatNDArray, float, FloatNDArray, FloatNDArray]:
-        """Run alternating Newton-GD optimization routine with initial point x0.
+        """Run the Newton optimization routine with initial point x0.
 
         Parameters
         ----------
@@ -670,6 +698,14 @@ class Alt_Newton_GD(_Optimizer):
 
         self.penalty_ratio = self.opt_params.penalty_ratio
 
+        # A Hessian costs about one solve per multiplier: with many, compute one only
+        # every other step, alternating with gradient steps.
+        alternate = self.ndof > self.opt_params.newton_alternate_above
+        # Learned step lengths are refined by backtracking while the value still
+        # falls. The full Newton step usually satisfies Armijo, and confirming that a
+        # shorter step is worse would cost a factorization every iteration.
+        self.accept_sufficient_decrease = not alternate
+
         outer_iter_count = 1
 
         if self.verbose > 0:
@@ -677,7 +713,7 @@ class Alt_Newton_GD(_Optimizer):
 
         while True:  # outer loop - penalty reduction
             self.penalty_vector_list = []  # reset penalty vectors
-            last_N_step_size = last_GD_step_size = 1.0  # reset step sizes
+            last_N_step_size = last_GD_step_size = 1.0  # reset learned step sizes
 
             inner_iter_count = 1
 
@@ -688,7 +724,7 @@ class Alt_Newton_GD(_Optimizer):
                 )
 
             while True:
-                doN = inner_iter_count % 2 == 1  # alternate between Newton and GD steps
+                doN = not alternate or inner_iter_count % 2 == 1
                 self.opt_fx, self.xgrad, self.xhess, _ = self.optfunc(
                     self.opt_x,
                     get_grad=True,
@@ -702,15 +738,20 @@ class Alt_Newton_GD(_Optimizer):
                 if self._break_condition(inner_iter_count, "inner"):
                     break
 
-                # find step for next iteration
+                # find step for next iteration: the Newton step, tried at full length
+                # unless alternating
                 if doN:
                     try:
-                        Ndir = np.linalg.solve(self.xhess, -self.xgrad)
-                        xdir = Ndir / np.linalg.norm(Ndir)
-                        last_step_size = last_N_step_size
+                        xdir = cast(
+                            FloatNDArray, np.linalg.solve(self.xhess, -self.xgrad)
+                        )
+                        if alternate:
+                            xdir = xdir / np.linalg.norm(xdir)
+                            last_step_size = last_N_step_size
+                        else:
+                            last_step_size = 1.0
                         if self.verbose >= 2:
                             print("doing Newton step")
-                            # print("xdir dot xgrad is", np.dot(xdir, self.xgrad))
                     except np.linalg.LinAlgError:
                         doN = False
                         if self.verbose >= 2:
@@ -734,10 +775,10 @@ class Alt_Newton_GD(_Optimizer):
                     self.opt_fx,
                 )
 
-                if doN:
-                    last_N_step_size = last_step_size
-                else:
+                if not doN:
                     last_GD_step_size = last_step_size
+                elif alternate:
+                    last_N_step_size = last_step_size
 
                 # move on to the next iteration
                 self.opt_x += opt_step_size * xdir

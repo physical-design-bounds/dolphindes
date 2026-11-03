@@ -82,8 +82,6 @@ class _SharedProjQCQP(ABC):
         Cached optimal Lagrange multipliers.
     current_grad : FloatNDArray | None
         Gradient of the dual at the cached solution.
-    current_hess : FloatNDArray | None
-        Hessian of the dual at the cached solution (if computed).
     current_xstar : ComplexArray | None
         Primal maximizer x* corresponding to current_lags.
     use_precomp : bool
@@ -199,9 +197,10 @@ class _SharedProjQCQP(ABC):
         self.Acho: Optional[Any] = None
         self.current_dual: Optional[float] = None
         self.current_grad: Optional[FloatNDArray] = None
-        self.current_hess: Optional[FloatNDArray] = None
         self.current_lags: Optional[FloatNDArray] = None
         self.current_xstar: Optional[ComplexArray] = None
+        # where the last dual solve's optimizer stopped
+        self._stop_lags: Optional[FloatNDArray] = None
         self.use_precomp = True
 
         # Cache of recently computed Cholesky factorizations, keyed by the lags
@@ -907,13 +906,13 @@ class _SharedProjQCQP(ABC):
         Returns
         -------
         current_dual : float
-            Optimal dual value.
+            Smallest dual value found, without the PSD-boundary penalties.
         current_lags : FloatNDArray
-            Optimal Lagrange multipliers.
+            Lagrange multipliers at which current_dual was found.
         current_grad : FloatNDArray
-            Gradient at optimum.
+            Gradient of the dual at current_lags, without penalties.
         current_hess : FloatNDArray | None
-            Hessian (if computed by Newton variant).
+            Hessian of the dual at current_lags, without penalties ('newton' only).
         current_xstar : ComplexArray
             Primal maximizer corresponding to current_lags.
         """
@@ -935,7 +934,24 @@ class _SharedProjQCQP(ABC):
             init_lags = self.find_feasible_lags()
         init_lags = np.array(init_lags, float)
 
-        optfunc = self.get_dual
+        best_dual = np.inf
+        best_lags = init_lags.copy()
+
+        def optfunc(
+            lags: FloatNDArray,
+            get_grad: bool = False,
+            get_hess: bool = False,
+            penalty_vectors: Optional[list[ComplexArray]] = None,
+        ) -> Tuple[float, Optional[FloatNDArray], Optional[FloatNDArray], Any]:
+            # Track the smallest dual without penalties over every evaluation, and
+            # where it was found.
+            nonlocal best_dual, best_lags
+            out = self.get_dual(lags, get_grad, get_hess, penalty_vectors)
+            if out[3].dualval_real < best_dual:
+                best_dual = out[3].dualval_real
+                best_lags = np.array(lags, dtype=float)
+            return out
+
         feasibility_func = self.is_dual_feasible
         penalty_vector_func = self._get_PSD_penalty
 
@@ -944,6 +960,7 @@ class _SharedProjQCQP(ABC):
             optimizer = Alt_Newton_GD(
                 optfunc, feasibility_func, penalty_vector_func, is_convex, opt_params
             )
+            optimizer.wall_step_func = self._wall_step
         elif method == "bfgs":
             optimizer = BFGS(
                 optfunc, feasibility_func, penalty_vector_func, is_convex, opt_params
@@ -954,18 +971,59 @@ class _SharedProjQCQP(ABC):
                 "Use newton or bfgs."
             )
 
-        self.current_lags, self.current_dual, self.current_grad, self.current_hess = (
-            optimizer.run(init_lags)
+        self._stop_lags = optimizer.run(init_lags)[0].copy()
+        # Report everything at the multipliers of the smallest dual. Cached calculation.
+        dual, grad, hess, _ = self.get_dual(
+            best_lags, get_grad=True, get_hess=method == "newton"
         )
-        self.current_xstar = self._get_xstar(self.current_lags)[0]
+        assert grad is not None
+        xstar = self._get_xstar(best_lags)[0]
+        self.current_dual, self.current_lags = dual, best_lags
+        self.current_grad, self.current_xstar = grad, xstar
 
-        return (
-            self.current_dual,
-            self.current_lags,
-            self.current_grad,
-            self.current_hess,
-            self.current_xstar,
+        return dual, best_lags, grad, hess, xstar
+
+    def _wall_step(self, lags: FloatNDArray, d: FloatNDArray) -> Optional[float]:
+        """Return the step t along d at which A(lags + t d) stops being PD.
+
+        A is affine in the lags, A(lags + t d) = A + t B with B = A(lags + d) - A, so it
+        first becomes singular at t = -1/mu for the most negative eigenvalue mu of
+        A^-1 B, which ARPACK finds through the factor of A (cached, as the optimizer
+        has just evaluated at lags) at one solve per iteration. A loose tolerance is
+        enough: the line search jumps to 0.9 t.
+
+        Returns inf if no eigenvalue is negative, and None if ARPACK fails or has not
+        converged within 50 restarts, or the problem is too small for it; the line
+        search then backtracks as usual.
+
+        This means the dual solver, if stepping outside the feasibility region, can
+        immediately step back just before the wall without doing a line search, saving
+        on a large fraction of the positive-definiteness checks.
+        """
+        A, _ = self._get_factorization(lags)
+        n = A.shape[0]
+        if n < 3:  # ARPACK needs k + 1 < ncv <= n
+            return None
+        B = self._get_total_A(lags + d) - A
+        op = spla.LinearOperator(
+            A.shape, matvec=lambda x: self._Acho_solve(B @ x), dtype=complex
         )
+        rng = np.random.default_rng(0)
+        v0 = rng.standard_normal(n) + 1j * rng.standard_normal(n)
+        try:
+            mu = spla.eigs(
+                op,
+                k=1,
+                which="SR",
+                ncv=min(10, n),
+                tol=1e-3,
+                maxiter=50,
+                v0=v0,
+                return_eigenvectors=False,
+            )[0].real
+        except spla.ArpackError:
+            return None
+        return np.inf if mu >= 0 else -1.0 / mu
 
     def merge_lead_constraints(
         self, merged_num: int = 2, metric: "OrthoMetric" = "hilbert_schmidt"
@@ -1131,7 +1189,7 @@ class _SharedProjQCQP(ABC):
 
         # Keep cached values consistent
         self.current_dual = new_dual
-        # current_grad/hess/xstar are now stale; recompute lazily when next requested
+        # current_grad/xstar are now stale; recompute lazily when next requested
 
         return self.Proj, self.current_lags
 

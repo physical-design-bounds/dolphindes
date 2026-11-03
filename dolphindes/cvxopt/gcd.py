@@ -476,7 +476,7 @@ def merge_lead_constraints(
     QCQP.current_lags[0] = Pnorm
     QCQP.n_proj_constr = len(QCQP.Proj)
 
-    QCQP.current_grad = QCQP.current_hess = None
+    QCQP.current_grad = None
 
     # precomputed_As/Fs were edited in place, so cached factorizations are stale.
     QCQP._invalidate_factor_cache()
@@ -560,7 +560,7 @@ def add_constraints(
         QCQP.Fs = new_Fs
 
     QCQP.n_proj_constr = len(QCQP.Proj)
-    QCQP.current_grad = QCQP.current_hess = None
+    QCQP.current_grad = None
 
     # precomputed_As/Fs were edited in place, so cached factorizations are stale.
     QCQP._invalidate_factor_cache()
@@ -665,6 +665,7 @@ def run_gcd(
     ## gcd loop
     gcd_iter_num = 0
     gcd_prev_dual: float = np.inf
+    gcd_best_dual: float = np.inf
     while True:
         gcd_iter_num += 1
         # solve current dual problem
@@ -676,19 +677,29 @@ def run_gcd(
         )
         assert QCQP.current_dual is not None
         assert QCQP.current_xstar is not None
+        # Each solve continues from where the previous one stopped, not from its best
+        # point, so its bound can come out slightly above an earlier iteration's.
+        gcd_best_dual = min(gcd_best_dual, QCQP.current_dual)
 
         print(
             f"At GCD iteration #{gcd_iter_num}, best dual bound found is \
-            {QCQP.current_dual}."
+            {gcd_best_dual}."
         )
 
         ## termination conditions
         if gcd_iter_num > max_gcd_iter_num:
             break
         if gcd_iter_num % gcd_iter_period == 0:
-            if gcd_prev_dual - QCQP.current_dual < gcd_tol * abs(gcd_prev_dual):
+            if gcd_prev_dual - gcd_best_dual < gcd_tol * abs(gcd_prev_dual):
                 break
-            gcd_prev_dual = QCQP.current_dual
+            gcd_prev_dual = gcd_best_dual
+
+        # Continue from where the optimizer stopped rather than from the best point.
+        assert QCQP._stop_lags is not None
+        QCQP.current_lags = QCQP._stop_lags.copy()
+        QCQP.current_dual = QCQP.get_dual(QCQP.current_lags)[0]
+        QCQP.current_xstar = QCQP._get_xstar(QCQP.current_lags)[0]
+        QCQP.current_grad = None
 
         ## generate new constraints
         new_Pdata_list = []

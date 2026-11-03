@@ -6,15 +6,18 @@ reference arrays, and exercise added general constraints.
 """
 
 import os
+import re
 from pathlib import Path
 
 import numpy as np
 import pytest
+import scipy.linalg as la
 import scipy.sparse as sp
 
 from dolphindes.cvxopt import (
     DenseSharedProjQCQP,
     GCDHyperparameters,
+    OptimizationHyperparameters,
     SparseSharedProjQCQP,
     gcd,
 )
@@ -849,6 +852,85 @@ def test_run_gcd_inner_solve_method(sparse_qcqp_data, monkeypatch, method, expec
     assert qcqp.current_dual is not None and np.isfinite(qcqp.current_dual)
 
 
+@pytest.mark.parametrize("method", ["bfgs", "newton"])
+def test_solve_dual_reports_smallest_dual_without_penalties(
+    sparse_qcqp_data, monkeypatch, method
+):
+    """current_dual is the smallest penalty-free dual over every evaluation, and the
+    lags, gradient, Hessian and xstar returned with it are those where it was found.
+
+    Uses run_gcd's inner-solve settings (one penalty level, max_restart=1), under
+    which the optimizer stops with its PSD-boundary penalties still active.
+    """
+    qcqp = sparse_qcqp_data["qcqp"]
+    seen = []
+    original = type(qcqp).get_dual
+
+    def spy(self, *args, **kwargs):
+        out = original(self, *args, **kwargs)
+        seen.append(out[3].dualval_real)
+        return out
+
+    opt_params = OptimizationHyperparameters(
+        opttol=1e-2,
+        min_inner_iter=5,
+        max_restart=1,
+        penalty_ratio=1e-2,
+        penalty_reduction=0.1,
+        break_iter_period=20,
+    )
+    init_lags = qcqp.find_feasible_lags()
+    monkeypatch.setattr(type(qcqp), "get_dual", spy)
+    _, _, _, hess, _ = qcqp.solve_current_dual_problem(
+        method, init_lags=init_lags, opt_params=opt_params
+    )
+    monkeypatch.undo()
+
+    assert qcqp.current_dual == min(seen)
+    dual, grad, hess_at_lags, _ = qcqp.get_dual(
+        qcqp.current_lags, get_grad=True, get_hess=method == "newton"
+    )
+    assert qcqp.current_dual == dual
+    assert np.array_equal(qcqp.current_grad, grad)
+    if method == "newton":
+        assert np.array_equal(hess, hess_at_lags)
+    else:
+        assert hess is None
+    assert np.allclose(qcqp.current_xstar, qcqp._get_xstar(qcqp.current_lags)[0])
+
+
+@pytest.mark.parametrize("method", ["bfgs", "newton"])
+def test_run_gcd_reported_bound_never_increases(sparse_qcqp_data, capsys, method):
+    """The bound run_gcd reports after each iteration is never above the previous
+    one, and it leaves current_dual as the dual at current_lags."""
+    params = GCDHyperparameters(
+        max_gcd_iter_num=8,
+        max_proj_cstrt_num=6,
+        gcd_iter_period=5,
+        gcd_tol=1e-3,
+        method=method,
+    )
+    qcqp = sparse_qcqp_data["qcqp"]
+
+    # restore the global random state so changing test order doesn't change tests
+    state = np.random.get_state()
+    np.random.seed(3)
+    try:
+        qcqp.run_gcd(params)
+    finally:
+        np.random.set_state(state)
+    reported = [
+        float(m)
+        for m in re.findall(
+            r"best dual bound found is\s+(\S+)\.\n", capsys.readouterr().out
+        )
+    ]
+
+    assert len(reported) >= 2
+    assert all(b <= a for a, b in zip(reported, reported[1:]))
+    assert qcqp.current_dual == qcqp.get_dual(qcqp.current_lags)[0]
+
+
 def test_minAeig_constraint_raises_smallest_eigenvalue(sparse_qcqp_data):
     """The smallest-eigenvector constraint must move away from the PSD boundary.
 
@@ -1032,6 +1114,43 @@ def _real_sparse_qcqp_for_assembly(n=10, k=3, seed=8):
         Pstruct,
         verbose=0,
     )
+
+
+@pytest.mark.parametrize("seed", [0, 1, 2])
+def test_wall_step_finds_psd_boundary(seed):
+    """_wall_step gives the step along d at which A(lags + t d) stops being positive
+    definite: the exact one, from the dense generalized eigenproblem, on a small QCQP."""
+    qcqp = _sparse_qcqp_for_assembly(diagonal=True, n_gen=0)
+    rng = np.random.default_rng(seed)
+    k = qcqp.get_number_constraints()
+    lags = 1e-3 * rng.standard_normal(k)  # A0 = 3I dominates: interior
+    d = rng.standard_normal(k)
+    A = qcqp._get_total_A(lags).toarray()
+    B = qcqp._get_total_A(lags + d).toarray() - A
+    mu = la.eigh(B, A, eigvals_only=True)[0]
+    assert mu < 0, "the test needs a direction that leaves the cone"
+
+    t = qcqp._wall_step(lags, d)
+
+    assert t is not None and np.isclose(t, -1.0 / mu, rtol=1e-2)
+    assert qcqp.is_dual_feasible(lags + 0.9 * t * d)
+    assert not qcqp.is_dual_feasible(lags + 1.1 * t * d)
+
+
+def test_is_dual_feasible_refuses_small_indefinite():
+    """A small indefinite A(lags) is infeasible, and a small PD one feasible.
+
+    CHOLMOD's "auto" analysis factors a matrix this small as a simplicial LDL^H,
+    which succeeds on an indefinite matrix; the supernodal analysis
+    SparseSharedProjQCQP uses raises instead.
+    """
+    qcqp = _sparse_qcqp_for_assembly(diagonal=True, n_gen=0)
+    d = np.random.default_rng(4).standard_normal(qcqp.get_number_constraints())
+    assert qcqp.is_dual_feasible(1e-3 * d)  # A0 = 3I dominates
+    t = 1.0
+    while np.linalg.eigvalsh(qcqp._get_total_A(t * d).toarray())[0] > -1.0:
+        t *= 2.0
+    assert not qcqp.is_dual_feasible(t * d)
 
 
 @pytest.mark.parametrize("diagonal", [True, False])

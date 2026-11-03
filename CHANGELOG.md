@@ -13,9 +13,44 @@ while we're pre-1.0, the public API may still change between minor releases.
   LDOS bounds at ndof = 400/900/1600, under both orthonormalization metrics and 5
   starting points: 0.14–1.35% tighter bound at equal iteration count in all 16 paired
   comparisons, reaching the old 15-iteration bound in 12–15 iterations.
-- **New:** `GCDHyperparameters(method=...)` selects the optimizer GCD uses for its
-  inner dual solve, `"newton"` (the default, unchanged behaviour) or `"bfgs"`. This
-  was previously hardcoded.
+- **Fixed:** `solve_current_dual_problem` returned the dual *plus* the PSD-boundary
+  penalties at the point where the optimizer stopped, and `run_gcd` reported and
+  tested convergence on that value. With GCD's single penalty level it sat up to 0.5%
+  above the smallest dual already evaluated, more than `gcd_tol`, so the reported
+  bound could rise between iterations and GCD stopped whenever it did. It now returns
+  the smallest penalty-free dual it evaluated with the multipliers, primal vector,
+  gradient and (Newton) Hessian where it found it, without penalties; the unused
+  `current_hess` attribute is removed.
+- **Faster, more reliable Newton (GCD's default):** `Alt_Newton_GD` now takes each
+  Newton step at its own length, trying the full step first and accepting the first
+  sufficient (Armijo) decrease, instead of normalizing the direction and relearning
+  its length by doubling. Along a nearly flat direction of the dual that relearning
+  does not reach the minimizer before the inner stopping test fires, so GCD stalled.
+  On 9 2D fixtures (LDOS, absorption, ring; 32–64 pixels a side), over 30 GCD
+  iterations, Newton now uses 0.44x the factorizations and ends on average 0.5% above
+  the best bound found (worst 1.4%), against 1.1% (worst 4.0%) before. Full steps
+  need about twice as many Hessians, each about one solve per multiplier, so above
+  `newton_alternate_above` multipliers (new in `OptimizationHyperparameters`, default
+  100), as with pixel-local constraints, Newton still alternates normalized Newton
+  and gradient steps.
+- **Fewer failed factorizations at the PSD boundary (Newton):** when a trial step
+  leaves the region where `A` is positive definite, the line search now jumps to 0.9
+  of the distance to that boundary along the step, instead of shrinking the step by
+  0.7 and refactorizing until it is back inside. `A` is affine in the multipliers, so
+  the distance is `-1/mu` for the most negative eigenvalue `mu` of `A^-1 B`, `B` the
+  change of `A` along the step: ARPACK (`eigs`) finds it through the factor already
+  in hand, in about 10 solves.
+- **Fixed:** BFGS could loop forever. The guard on `y·s` in its inverse-Hessian
+  update was commented out, so a step that did not move `x` made the inverse Hessian
+  NaN and no stopping test could pass. The update is now skipped unless
+  `y·s > 1e-10 |y||s|`: relative, so small but genuine curvature still updates it,
+  and NaN skips too.
+- **Faster feasibility check:** the sparse Cholesky analysis is now supernodal, so a
+  matrix that is not positive definite raises during its factorization and
+  `is_dual_feasible` no longer extracts `L` to find out. CHOLMOD's default ("auto")
+  factors small or very sparse matrices as a simplicial LDL^H, which succeeds on
+  indefinite matrices; that is what the extraction was guarding against. It cost
+  19% of a successful check at n = 14400, and 3% of a GCD run.
 
 ## [0.2.2] — 2026-07-29
 
