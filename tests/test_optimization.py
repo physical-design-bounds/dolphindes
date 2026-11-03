@@ -226,3 +226,40 @@ def test_line_search_jumps_to_the_wall(wall, expected_checks) -> None:
     else:
         assert len(checks) > 10
         assert np.isclose(alpha_feas, 100.0 * 0.7 ** (len(checks) - 1))
+
+
+@pytest.mark.parametrize("alternate_above", [np.inf, 3])
+def test_newton_alternates_above_newton_alternate_above(alternate_above) -> None:
+    """With more multipliers than newton_alternate_above, Newton asks for a Hessian
+    only every other step, alternating with gradient steps; with fewer, every step is
+    a Newton step. Both reach the minimizer."""
+    # a local generator: other test modules depend on the global random state
+    rng = np.random.default_rng(0)
+    n = 6
+    Q, _ = np.linalg.qr(rng.standard_normal((n, n)))
+    A = Q @ np.diag(np.logspace(0, 3, n)) @ Q.T
+    b = rng.random(n)
+    hess_requested = []
+
+    def optfunc(x, get_grad=False, get_hess=False, penalty_vectors=[]):
+        if get_grad:  # one call per step; the line search asks for values only
+            hess_requested.append(get_hess)
+        hess = 2 * A if get_hess else None
+        return float(x @ A @ x - b @ x), 2 * A @ x - b, hess, 0
+
+    opt = Alt_Newton_GD(
+        optfunc,
+        lambda x: True,
+        lambda x: (np.zeros_like(x), None),
+        True,
+        OptimizationHyperparameters(
+            opttol=1e-6, max_restart=0, newton_alternate_above=alternate_above
+        ),
+    )
+    x, _, _, _ = opt.run(np.ones(n))
+
+    assert np.allclose(x, 0.5 * np.linalg.solve(A, b), atol=1e-4)
+    if alternate_above < n:
+        assert hess_requested == [i % 2 == 0 for i in range(len(hess_requested))]
+    else:
+        assert all(hess_requested)

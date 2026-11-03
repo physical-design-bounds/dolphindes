@@ -34,6 +34,10 @@ class OptimizationHyperparameters:
         Period of iterations for checking break conditions. Default: 50.
     verbose : int
         Verbosity level (0 = silent). Default: 0.
+    newton_alternate_above : float
+        Number of multipliers above which Newton (Alt_Newton_GD) alternates Newton
+        and gradient steps, both normalized with lengths learned from step to step,
+        instead of taking every Newton step at its own length.
     """
 
     opttol: float = 1e-2
@@ -44,6 +48,7 @@ class OptimizationHyperparameters:
     penalty_reduction: float = 0.1
     break_iter_period: int = 50
     verbose: int = 0
+    newton_alternate_above: float = 100
 
 
 class _Optimizer:
@@ -547,6 +552,10 @@ class Alt_Newton_GD(_Optimizer):
         - run() takes Newton steps at their own length: the full step is tried
           first and the line search backs off from it. A normalized gradient
           descent step is taken only when the Hessian cannot be solved.
+        - With more than opt_params.newton_alternate_above multipliers, run()
+          instead alternates Newton and gradient descent steps, both normalized and
+          with lengths learned from step to step, so that a Hessian is computed
+          only every other step.
         - _break_condition() is implemented to check for convergence
     """
 
@@ -693,6 +702,13 @@ class Alt_Newton_GD(_Optimizer):
 
         self.penalty_ratio = self.opt_params.penalty_ratio
 
+        # A Hessian costs about one solve per multiplier: with many, compute one only
+        # every other step, alternating with gradient steps.
+        alternate = self.ndof > self.opt_params.newton_alternate_above
+        # Learned step lengths are refined by backtracking while the value still
+        # falls; full Newton steps accept the first sufficient decrease.
+        self.accept_sufficient_decrease = not alternate
+
         outer_iter_count = 1
 
         if self.verbose > 0:
@@ -700,7 +716,7 @@ class Alt_Newton_GD(_Optimizer):
 
         while True:  # outer loop - penalty reduction
             self.penalty_vector_list = []  # reset penalty vectors
-            last_GD_step_size = 1.0  # reset the fallback gradient step size
+            last_N_step_size = last_GD_step_size = 1.0  # reset learned step sizes
 
             inner_iter_count = 1
 
@@ -711,10 +727,11 @@ class Alt_Newton_GD(_Optimizer):
                 )
 
             while True:
+                doN = not alternate or inner_iter_count % 2 == 1
                 self.opt_fx, self.xgrad, self.xhess, _ = self.optfunc(
                     self.opt_x,
                     get_grad=True,
-                    get_hess=True,
+                    get_hess=doN,
                     penalty_vectors=self.penalty_vector_list,
                 )
 
@@ -725,16 +742,23 @@ class Alt_Newton_GD(_Optimizer):
                     break
 
                 # find step for next iteration: the Newton step, tried at full length
-                try:
-                    xdir = cast(FloatNDArray, np.linalg.solve(self.xhess, -self.xgrad))
-                    last_step_size = 1.0
-                    doN = True
-                    if self.verbose >= 2:
-                        print("doing Newton step")
-                except np.linalg.LinAlgError:
-                    doN = False
-                    if self.verbose >= 2:
-                        print("Hessian is singular")
+                # unless alternating
+                if doN:
+                    try:
+                        xdir = cast(
+                            FloatNDArray, np.linalg.solve(self.xhess, -self.xgrad)
+                        )
+                        if alternate:
+                            xdir = xdir / np.linalg.norm(xdir)
+                            last_step_size = last_N_step_size
+                        else:
+                            last_step_size = 1.0
+                        if self.verbose >= 2:
+                            print("doing Newton step")
+                    except np.linalg.LinAlgError:
+                        doN = False
+                        if self.verbose >= 2:
+                            print("Hessian is singular")
 
                 if not doN:
                     if self.verbose >= 2:
@@ -754,7 +778,9 @@ class Alt_Newton_GD(_Optimizer):
                     self.opt_fx,
                 )
 
-                if not doN:
+                if doN:
+                    last_N_step_size = last_step_size
+                else:
                     last_GD_step_size = last_step_size
 
                 # move on to the next iteration
