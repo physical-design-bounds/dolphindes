@@ -155,7 +155,7 @@ class _Optimizer:
         Parameters
         ----------
         dir : numpy.ndarray
-            The search direction vector, normalized to 1
+            The search direction: a unit vector, or the full Newton step
         x0 : numpy.ndarray
             The starting point for the line search
         fx0 : float
@@ -559,10 +559,6 @@ class Alt_Newton_GD(_Optimizer):
         - _break_condition() is implemented to check for convergence
     """
 
-    # the full Newton step usually satisfies Armijo; confirming that a shorter step
-    # is worse would cost a factorization every iteration
-    accept_sufficient_decrease = True
-
     def __init__(self, *params: Any) -> None:
         super().__init__(*params)
 
@@ -706,7 +702,8 @@ class Alt_Newton_GD(_Optimizer):
         # every other step, alternating with gradient steps.
         alternate = self.ndof > self.opt_params.newton_alternate_above
         # Learned step lengths are refined by backtracking while the value still
-        # falls; full Newton steps accept the first sufficient decrease.
+        # falls. The full Newton step usually satisfies Armijo, and confirming that a
+        # shorter step is worse would cost a factorization every iteration.
         self.accept_sufficient_decrease = not alternate
 
         outer_iter_count = 1
@@ -778,10 +775,10 @@ class Alt_Newton_GD(_Optimizer):
                     self.opt_fx,
                 )
 
-                if doN:
-                    last_N_step_size = last_step_size
-                else:
+                if not doN:
                     last_GD_step_size = last_step_size
+                elif alternate:
+                    last_N_step_size = last_step_size
 
                 # move on to the next iteration
                 self.opt_x += opt_step_size * xdir

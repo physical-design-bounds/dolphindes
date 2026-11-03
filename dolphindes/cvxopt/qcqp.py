@@ -101,8 +101,6 @@ class SparseSharedProjQCQP(_SharedProjQCQP):
         Cached Lagrange multipliers (projector first, then general).
     current_grad : FloatNDArray | None
         Gradient of dual at current_lags (if computed).
-    current_hess : FloatNDArray | None
-        Hessian of dual at current_lags (only when no general constraints).
     current_xstar : ComplexArray | None
         Primal maximizer associated with current_lags.
     use_precomp : bool

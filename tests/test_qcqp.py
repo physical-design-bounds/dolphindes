@@ -6,6 +6,7 @@ reference arrays, and exercise added general constraints.
 """
 
 import os
+import re
 from pathlib import Path
 
 import numpy as np
@@ -855,8 +856,8 @@ def test_run_gcd_inner_solve_method(sparse_qcqp_data, monkeypatch, method, expec
 def test_solve_dual_reports_smallest_dual_without_penalties(
     sparse_qcqp_data, monkeypatch, method
 ):
-    """current_dual is the smallest penalty-free dual over every evaluation, so it is
-    never above the dual where the optimizer stopped.
+    """current_dual is the smallest penalty-free dual over every evaluation, and the
+    lags, gradient, Hessian and xstar returned with it are those where it was found.
 
     Uses run_gcd's inner-solve settings (one penalty level, max_restart=1), under
     which the optimizer stops with its PSD-boundary penalties still active.
@@ -880,36 +881,54 @@ def test_solve_dual_reports_smallest_dual_without_penalties(
     )
     init_lags = qcqp.find_feasible_lags()
     monkeypatch.setattr(type(qcqp), "get_dual", spy)
-    qcqp.solve_current_dual_problem(method, init_lags=init_lags, opt_params=opt_params)
+    _, _, _, hess, _ = qcqp.solve_current_dual_problem(
+        method, init_lags=init_lags, opt_params=opt_params
+    )
     monkeypatch.undo()
 
     assert qcqp.current_dual == min(seen)
-    assert qcqp.current_dual <= qcqp.get_dual(qcqp.current_lags)[0]
+    dual, grad, hess_at_lags, _ = qcqp.get_dual(
+        qcqp.current_lags, get_grad=True, get_hess=method == "newton"
+    )
+    assert qcqp.current_dual == dual
+    assert np.array_equal(qcqp.current_grad, grad)
+    if method == "newton":
+        assert np.array_equal(hess, hess_at_lags)
+    else:
+        assert hess is None
+    assert np.allclose(qcqp.current_xstar, qcqp._get_xstar(qcqp.current_lags)[0])
 
 
-def test_run_gcd_reported_bound_never_increases(sparse_qcqp_data, monkeypatch):
-    """The bound run_gcd reports after each iteration is the smallest so far."""
+@pytest.mark.parametrize("method", ["bfgs", "newton"])
+def test_run_gcd_reported_bound_never_increases(sparse_qcqp_data, capsys, method):
+    """The bound run_gcd reports after each iteration is never above the previous
+    one, and it leaves current_dual as the dual at current_lags."""
     params = GCDHyperparameters(
         max_gcd_iter_num=8,
         max_proj_cstrt_num=6,
         gcd_iter_period=5,
         gcd_tol=1e-3,
-        method="bfgs",
+        method=method,
     )
-    np.random.seed(3)
     qcqp = sparse_qcqp_data["qcqp"]
-    reported = []
-    original = type(qcqp).add_constraints
 
-    def spy(self, *args, **kwargs):
-        reported.append(self.current_dual)
-        return original(self, *args, **kwargs)
-
-    monkeypatch.setattr(type(qcqp), "add_constraints", spy)
-    qcqp.run_gcd(params)
+    # restore the global random state so changing test order doesn't change tests
+    state = np.random.get_state()
+    np.random.seed(3)
+    try:
+        qcqp.run_gcd(params)
+    finally:
+        np.random.set_state(state)
+    reported = [
+        float(m)
+        for m in re.findall(
+            r"best dual bound found is\s+(\S+)\.\n", capsys.readouterr().out
+        )
+    ]
 
     assert len(reported) >= 2
     assert all(b <= a for a, b in zip(reported, reported[1:]))
+    assert qcqp.current_dual == qcqp.get_dual(qcqp.current_lags)[0]
 
 
 def test_minAeig_constraint_raises_smallest_eigenvalue(sparse_qcqp_data):

@@ -13,14 +13,14 @@ while we're pre-1.0, the public API may still change between minor releases.
   LDOS bounds at ndof = 400/900/1600, under both orthonormalization metrics and 5
   starting points: 0.14–1.35% tighter bound at equal iteration count in all 16 paired
   comparisons, reaching the old 15-iteration bound in 12–15 iterations.
-- **New:** `GCDHyperparameters(method=...)` selects the optimizer GCD uses for its
-  inner dual solve, `"newton"` (the default, unchanged behaviour) or `"bfgs"`. This
-  was previously hardcoded.
 - **Fixed:** `solve_current_dual_problem` returned the dual *plus* the PSD-boundary
   penalties at the point where the optimizer stopped, and `run_gcd` reported and
   tested convergence on that value. With GCD's single penalty level it sat up to 0.5%
   above the smallest dual already evaluated, more than `gcd_tol`, so the reported
-  bound could rise between iterations and GCD stopped whenever it did.
+  bound could rise between iterations and GCD stopped whenever it did. It now returns
+  the smallest penalty-free dual it evaluated with the multipliers, primal vector,
+  gradient and (Newton) Hessian where it found it, without penalties; the unused
+  `current_hess` attribute is removed.
 - **Faster, more reliable Newton (GCD's default):** `Alt_Newton_GD` now takes each
   Newton step at its own length, trying the full step first and accepting the first
   sufficient (Armijo) decrease, instead of normalizing the direction and relearning
