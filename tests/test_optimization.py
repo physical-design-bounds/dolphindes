@@ -229,7 +229,7 @@ def test_line_search_jumps_to_the_wall(wall, expected_checks) -> None:
 
 
 @pytest.mark.parametrize("alternate_above", [np.inf, 3])
-def test_newton_alternates_above_newton_alternate_above(alternate_above) -> None:
+def test_newton_alternates_with_gradient_steps_above_threshold(alternate_above) -> None:
     """With more multipliers than newton_alternate_above, Newton asks for a Hessian
     only every other step, alternating with gradient steps; with fewer, every step is
     a Newton step. Both reach the minimizer."""
