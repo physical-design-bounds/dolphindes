@@ -153,6 +153,81 @@ class _Optimizer:
         if violated.size > 0:
             raise ValueError(f"x0 is negative at nonneg indices {violated.tolist()}.")
 
+    def _descent_direction(
+        self,
+        x: FloatNDArray,
+        g: FloatNDArray,
+        M: FloatNDArray | None = None,
+        M_is_inverse: bool = False,
+    ) -> FloatNDArray:
+        """Return the search direction at x, keeping the nonnegativity bounds.
+
+        Without bounds, the direction is
+            M is None:                  gradient descent, -g
+            M is the Hessian H:         the Newton step, -H^-1 g
+            M_is_inverse (M ~ H^-1):    the BFGS step, -M g
+
+        With bounds, the variables at 0 that this step would push below 0 are held at
+        0 and the same kind of step is taken on the others (see the comments below).
+        The direction never pushes a variable at 0 below 0, and it is zero exactly at
+        a KKT point of the bounded problem, where the caller stops.
+
+        Parameters
+        ----------
+        x : FloatNDArray
+            Current point.
+        g : FloatNDArray
+            Gradient at x.
+        M : FloatNDArray | None, optional
+            Hessian at x, or with M_is_inverse the BFGS inverse-Hessian approximation.
+            None for gradient descent.
+        M_is_inverse : bool, optional
+            Whether M approximates the inverse Hessian rather than the Hessian.
+
+        Returns
+        -------
+        FloatNDArray
+            The search direction, not normalized.
+        """
+        if self.nonneg is None:
+            if M is None:
+                return -g
+            if M_is_inverse:
+                return -M @ g
+            return cast(FloatNDArray, np.linalg.solve(M, -g))
+
+        # Split the variables: a bounded variable at 0 with g_j > 0 would be pushed
+        # below 0 by descent, so it is held at 0 for this step (the fixed set B). All
+        # others are free (the set F). That includes a bounded variable at 0 with
+        # g_j <= 0, which descent pushes up: it is released from the bound.
+        at_bound = self.nonneg & (x <= 0.0)
+        free = ~(at_bound & (g > 0.0))
+        fixed, g_F = ~free, g[free]
+
+        # Take the step on F only, with B held at 0. Gradient descent: -g on F.
+        # Newton: solve H_FF d_F = -g_F. BFGS has M ~ H^-1 rather than H, and
+        # (H_FF)^-1 is not M_FF; by the block inverse,
+        # (H_FF)^-1 = M_FF - M_FB (M_BB)^-1 M_BF, which costs one |B| x |B| solve.
+        proj_grad = cast(FloatNDArray, np.where(free, -g, 0.0))
+        if M is None:
+            return proj_grad
+        d = np.zeros_like(g)
+        if M_is_inverse:
+            y = np.linalg.solve(M[np.ix_(fixed, fixed)], M[np.ix_(fixed, free)] @ g_F)
+            d[free] = M[np.ix_(free, fixed)] @ y - M[np.ix_(free, free)] @ g_F
+        else:
+            d[free] = np.linalg.solve(M[np.ix_(free, free)], -g_F)
+
+        # Clean up coupling: through the off-diagonal terms of H, the step can still
+        # push a released variable (at 0, g_j <= 0) below 0, so those components are
+        # dropped. This never costs descent: each dropped term g_j d_j is >= 0.
+        d[at_bound & (d < 0.0)] = 0.0
+
+        # Safeguard: g @ d >= 0 only if H_FF is not positive definite, or if g_F = 0.
+        # Fall back to the projected gradient then. It is zero exactly at a KKT point
+        # (g_j = 0 on F, g_j > 0 on B), so a zero direction means converged.
+        return d if g @ d < 0.0 else proj_grad
+
     def _has_released(self) -> bool:
         """Return True if a bounded variable at 0 has a gradient asking it to grow.
 
