@@ -246,8 +246,9 @@ class _Optimizer:
 
         With bounds, the search starts at the step where the first bounded variable
         reaches 0, if that is shorter than step_size. _line_search only shortens the
-        step from where it starts, so no point it tries leaves the box, and a variable
-        the step takes to 0 lands on exactly 0 (see the comments below).
+        step from where it starts, so no point it tries takes a bounded variable below
+        0, and a variable the step takes to 0 lands on exactly 0 (see the comments
+        below).
 
         Parameters
         ----------
@@ -288,7 +289,7 @@ class _Optimizer:
         # Start the search at the cap if it is shorter than step_size. _line_search
         # only shortens the step from where it starts (backtracking for feasibility,
         # the jump to the PSD wall when that is shorter, backtracking on the value),
-        # so every point it tries is in the box.
+        # so every point it tries keeps the bounded variables >= 0.
         init_step_size = min(step_size, cap)
         opt_step_size, feas_step_size = self._line_search(
             xdir, x, cast(float, self.opt_fx), self.xgrad, init_step_size
@@ -468,7 +469,9 @@ class BFGS(_Optimizer):
                     and np.abs(function_value - fminus_xxgrad)
                     < opttol * np.abs(fminus_xxgrad)
                     and np.abs(remaining_descent) < opttol * np.abs(fminus_xxgrad)
-                    and np.linalg.norm(self.xgrad) < opttol * np.abs(function_value)
+                    # projected gradient: entries held at 0 by their bound don't count
+                    and np.linalg.norm(self._descent_direction(opt_x, self.xgrad))
+                    < opttol * np.abs(function_value)
                 ):
                     return True
 
@@ -776,7 +779,9 @@ class Alt_Newton_GD(_Optimizer):
                     and np.abs(function_value - fminus_xxgrad)
                     < opttol * np.abs(fminus_xxgrad)
                     and np.abs(remaining_descent) < opttol * np.abs(fminus_xxgrad)
-                    and np.linalg.norm(self.xgrad) < opttol * np.abs(function_value)
+                    # projected gradient: entries held at 0 by their bound don't count
+                    and np.linalg.norm(self._descent_direction(opt_x, self.xgrad))
+                    < opttol * np.abs(function_value)
                 ):
                     return True
 

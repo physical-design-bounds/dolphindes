@@ -1286,6 +1286,11 @@ def test_invalid_metric_raises(sparse_qcqp_data):
 INEQ_SOLVERS = [("bfgs", 100), ("newton", 100), ("newton", 0)]
 INEQ_SOLVER_IDS = ["bfgs", "newton", "newton-alternating"]
 
+# A multiplier at its bound is exactly 0 where the optimizer stops, but the reported
+# multipliers are those of the smallest dual evaluated, which can be the iterate just
+# before it landed on 0 (seen at ~1e-14).
+AT_BOUND = 1e-12
+
 
 def _solve_tight(qcqp, solver, init_lags):
     """Solve the dual to tight tolerance; return (dual, lags)."""
@@ -1384,7 +1389,7 @@ def _wall_qcqp(gen_ineq=None, keep=None, n=40, k=8, m=4, seed=3, a0_shift=0.05):
 def test_general_inequality_against_equality_and_dropped(solver):
     """With the PSD wall binding, constraint j as an inequality gives the equality dual
     if its multiplier there is >= 0, and otherwise the dual with j dropped, with its
-    multiplier exactly 0: the dual is convex, so when the unbounded optimum has
+    multiplier at 0: the dual is convex, so when the unbounded optimum has
     mu_j < 0 the optimum over mu_j >= 0 lies on mu_j = 0."""
     k, m = 8, 4
     x0 = np.concatenate([np.full(k, 1e-6), np.zeros(m)])
@@ -1405,14 +1410,14 @@ def test_general_inequality_against_equality_and_dropped(solver):
             dropped = _wall_qcqp(keep=others)
             dual_drop, _ = _solve_tight(dropped, solver, np.delete(x0, k + j))
             assert np.isclose(dual, dual_drop, rtol=1e-7)
-            assert lags[k + j] == 0.0
+            assert lags[k + j] <= AT_BOUND
 
     # all inequalities at once: a relaxation of the equalities, a restriction of
     # dropping them all, and some bounds active
     dual, lags = _solve_tight(_wall_qcqp(gen_ineq=[True] * m), solver, x0)
     dual_none, _ = _solve_tight(_wall_qcqp(keep=[]), solver, x0[:k])
     assert dual_eq * (1 - 1e-7) <= dual <= dual_none * (1 + 1e-7)
-    assert np.all(lags[k:] >= 0.0) and np.any(lags[k:] == 0.0)
+    assert np.all(lags[k:] >= 0.0) and np.any(lags[k:] <= AT_BOUND)
 
 
 @pytest.mark.parametrize("solver", INEQ_SOLVERS, ids=INEQ_SOLVER_IDS)
@@ -1429,11 +1434,12 @@ def test_general_inequality_complementary_slackness_off_the_wall(solver):
     assert eigs[0] > 0.1 * eigs[-1], "fixture should have the optimum off the wall"
 
     mu, grad = lags[k:], qcqp.current_grad
-    assert np.all(mu >= 0.0) and np.any(mu == 0.0) and np.any(mu > 0.0)
+    at_bound = mu <= AT_BOUND
+    assert np.all(mu >= 0.0) and np.any(at_bound) and not np.all(at_bound)
     tol = 1e-6 * max(1.0, abs(dual))
-    free = np.concatenate([np.ones(k, dtype=bool), mu > 0.0])
+    free = np.concatenate([np.ones(k, dtype=bool), ~at_bound])
     assert np.all(np.abs(grad[free]) < tol)  # equalities and active inequalities
-    assert np.all(grad[k:][mu == 0.0] > 0.0)  # inactive inequalities hold strictly
+    assert np.all(grad[k:][at_bound] > 0.0)  # inactive inequalities hold strictly
     assert np.all(np.abs(mu * grad[k:]) < tol)
 
     x = qcqp.current_xstar
@@ -1444,7 +1450,7 @@ def test_general_inequality_complementary_slackness_off_the_wall(solver):
 def test_run_gcd_keeps_general_inequality(sparse_qcqp_data):
     """GCD only changes projector constraints, so a power bound |A2 x|^2 <= P marked
     as an inequality keeps its place and its sign through GCD: its multiplier ends
-    > 0 when the bound cuts off the unconstrained optimum, and exactly 0 when not."""
+    > 0 when the bound cuts off the unconstrained optimum, and 0 when not."""
     d = sparse_qcqp_data
     Pdiags = d["Pdiags"]
     Projlist = [
@@ -1476,7 +1482,7 @@ def test_run_gcd_keeps_general_inequality(sparse_qcqp_data):
         assert qcqp.n_gen_constr == 1 and list(qcqp.gen_ineq) == [True]
         assert len(qcqp.current_lags) == qcqp.n_proj_constr + 1
         mu = qcqp.current_lags[-1]
-        assert mu > 0.0 if active else mu == 0.0
+        assert mu > AT_BOUND if active else mu <= AT_BOUND
 
 
 def test_gen_ineq_validation_and_mask():
@@ -1498,3 +1504,29 @@ def test_gen_ineq_validation_and_mask():
     qcqp = _norm_bound_qcqp(s0, 0.0, eye2, [1.0], [True])
     with pytest.raises(ValueError, match="negative"):
         qcqp.solve_current_dual_problem("newton", init_lags=[-0.5])
+
+    # reported multipliers: roundoff below 0 on an inequality is clipped, so warm
+    # starts work; anything more negative is an error, not roundoff
+    qcqp = _wall_qcqp(gen_ineq=[False, True, False, True])
+    lags = np.r_[np.full(8, -0.3), -0.2, -1e-17, 0.5, 0.0]
+    clipped = qcqp._clip_to_bounds(lags)
+    assert clipped[9] == 0.0
+    assert np.array_equal(np.delete(clipped, 9), np.delete(lags, 9))
+    with pytest.raises(RuntimeError, match="below 0"):
+        qcqp._clip_to_bounds(np.r_[np.zeros(8), 0.0, -1e-3, 0.5, 0.0])
+
+
+def test_gen_ineq_keeps_positional_order():
+    """gen_ineq comes after verbose, so positional calls written before it still work."""
+    n = 3
+    eye, zeros = np.eye(n, dtype=complex), np.zeros(n, dtype=complex)
+    P = sp.diags_array(np.ones(n), format="csc")
+    eye_sp = sp.csc_array(eye)
+    dense = DenseSharedProjQCQP(
+        eye, zeros, 0.0, eye, zeros, [P], P, None, [eye], [zeros], [1.0], 0
+    )
+    sparse = SparseSharedProjQCQP(
+        eye_sp, zeros, 0.0, eye_sp, eye_sp, zeros, [P], P, [eye_sp], [zeros], [1.0], 0
+    )
+    for qcqp in (dense, sparse):
+        assert qcqp.verbose == 0 and not np.any(qcqp.gen_ineq)

@@ -69,11 +69,11 @@ class SparseSharedProjQCQP(_SharedProjQCQP):
         (Optional) list of linear term vectors for general constraints.
     c_2j : ArrayLike | None
         (Optional) array of constant terms for general constraints.
+    verbose : int, default 0
+        Verbosity level (≥1 prints preprocessing info).
     gen_ineq : ArrayLike | None
         (Optional) boolean mask over the general constraints marking those that are
         inequalities (>= 0); their multipliers are kept >= 0. Default: all equalities.
-    verbose : int, default 0
-        Verbosity level (≥1 prints preprocessing info).
 
     Attributes
     ----------
@@ -307,11 +307,11 @@ class DenseSharedProjQCQP(_SharedProjQCQP):
         Right quadratic factor (defaults to identity if None).
     B_j, s_2j, c_2j : optional
         General constraints, as in SparseSharedProjQCQP.
+    verbose : int, default 0
+        Verbosity level.
     gen_ineq : ArrayLike | None
         (Optional) boolean mask over the general constraints marking those that are
         inequalities (>= 0); their multipliers are kept >= 0. Default: all equalities.
-    verbose : int, default 0
-        Verbosity level.
 
     Notes
     -----
@@ -331,8 +331,8 @@ class DenseSharedProjQCQP(_SharedProjQCQP):
         B_j: list[ArrayLike] | None = None,
         s_2j: list[ArrayLike] | None = None,
         c_2j: ArrayLike | None = None,
-        gen_ineq: ArrayLike | None = None,
         verbose: int = 0,
+        gen_ineq: ArrayLike | None = None,
     ):
         if A2 is None:
             n = int(np.asarray(s0).shape[0])

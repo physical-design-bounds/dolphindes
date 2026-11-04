@@ -118,8 +118,8 @@ class _SharedProjQCQP(ABC):
         B_j: list[SparseDense] | None = None,
         s_2j: list[ArrayLike] | None = None,
         c_2j: ArrayLike | None = None,
-        gen_ineq: ArrayLike | None = None,
         verbose: int = 0,
+        gen_ineq: ArrayLike | None = None,
     ) -> None:
         if B_j is None:
             all_mat_sp = [sp.issparse(A0), sp.issparse(A1)]
@@ -308,6 +308,25 @@ class _SharedProjQCQP(ABC):
             return None
         proj = np.zeros(self.n_proj_constr, dtype=bool)
         return cast(NDArray[np.bool_], np.concatenate([proj, self.gen_ineq]))
+
+    def _clip_to_bounds(self, lags: FloatNDArray) -> FloatNDArray:
+        """Return lags with roundoff below 0 on the inequality multipliers set to 0.
+
+        The smallest dual can be found at a line-search trial point where a multiplier
+        reaching its bound is 0 only up to roundoff (~-1e-17); a warm start from there
+        would be rejected. Anything below -1e-12 times the largest multiplier means the
+        optimizer left the bounds, which is an error, not roundoff.
+        """
+        nonneg = self._nonneg_mask()
+        if nonneg is None:
+            return lags
+        tol = 1e-12 * max(1.0, float(np.max(np.abs(lags))))
+        if np.any(lags[nonneg] < -tol):
+            worst = float(np.min(lags[nonneg]))
+            raise RuntimeError(f"An inequality multiplier is {worst:.3g}, below 0.")
+        clipped = lags.copy()
+        clipped[nonneg] = np.maximum(clipped[nonneg], 0.0)
+        return clipped
 
     def _add_projectors(self, lags: FloatNDArray) -> ComplexArray:
         """Form the diagonal of sum_j λ_j P_j (diagonal projectors only)."""
@@ -1002,7 +1021,9 @@ class _SharedProjQCQP(ABC):
             )
 
         self._stop_lags = optimizer.run(init_lags)[0].copy()
-        # Report everything at the multipliers of the smallest dual. Cached calculation.
+        # Report everything at the multipliers of the smallest dual (cached
+        # calculation), so later solves can warm-start from them.
+        best_lags = self._clip_to_bounds(best_lags)
         dual, grad, hess, _ = self.get_dual(
             best_lags, get_grad=True, get_hess=method == "newton"
         )
