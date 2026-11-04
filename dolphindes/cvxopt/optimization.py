@@ -228,6 +228,74 @@ class _Optimizer:
         # (g_j = 0 on F, g_j > 0 on B), so a zero direction means converged.
         return d if g @ d < 0.0 else proj_grad
 
+    def _bounded_line_search(
+        self, xdir: FloatNDArray, step_size: float
+    ) -> Tuple[FloatNDArray, float, float, float]:
+        """Run _line_search along xdir, starting no further than the first bound.
+
+        Without bounds, this is _line_search from step_size, and the step is
+        opt_step_size * xdir.
+
+        With bounds, the search starts at the step where the first bounded variable
+        reaches 0, if that is shorter than step_size. _line_search only shortens the
+        step from where it starts, so no point it tries leaves the box, and a variable
+        the step takes to 0 lands on exactly 0 (see the comments below).
+
+        Parameters
+        ----------
+        xdir : FloatNDArray
+            Search direction from _descent_direction, normalized or not.
+        step_size : float
+            Step size to start from: the learned one, or 1 for a full Newton step.
+
+        Returns
+        -------
+        delta : FloatNDArray
+            The step to add to opt_x.
+        opt_step_size : float
+            Step size accepted by _line_search.
+        feas_step_size : float
+            Step size after backtracking for feasibility only, from _line_search.
+        init_step_size : float
+            Step size the search started from, min(step_size, step to the first
+            bound). Callers compare opt_step_size with this, not with step_size, to
+            tell whether the search backtracked.
+        """
+        x = cast(FloatNDArray, self.opt_x)
+
+        # Find the cap: the step at which the first bounded variable reaches 0. Only
+        # bounded variables that decrease along xdir can reach it, and none of those
+        # is at 0 (_descent_direction never pushes a variable at 0 below 0), so the
+        # cap is > 0. k is the variable that sets it.
+        cap, k = np.inf, -1
+        if self.nonneg is not None:
+            hits = np.flatnonzero(self.nonneg & (xdir < 0.0))
+            if hits.size > 0:
+                steps = x[hits] / -xdir[hits]
+                i = int(np.argmin(steps))
+                cap, k = float(steps[i]), int(hits[i])
+
+        # Start the search at the cap if it is shorter than step_size. _line_search
+        # only shortens the step from where it starts (backtracking for feasibility,
+        # the jump to the PSD wall when that is shorter, backtracking on the value),
+        # so every point it tries is in the box.
+        init_step_size = min(step_size, cap)
+        opt_step_size, feas_step_size = self._line_search(
+            xdir, x, cast(float, self.opt_fx), self.xgrad, init_step_size
+        )
+
+        # Land exactly on the bound: if the search kept the cap, x_k + cap * xdir_k
+        # is 0 only up to roundoff (~1e-17). A variable left just above 0 would not
+        # count as at the bound next iteration and would cap the next step at a tiny
+        # length, so x_k is set to exactly 0 (x + (-x) is exactly 0 in floating
+        # point). Roundoff below 0 on the other bounded variables is clipped.
+        delta = opt_step_size * xdir
+        if self.nonneg is not None:
+            if opt_step_size >= cap:
+                delta[k] = -x[k]
+            delta[self.nonneg] = np.maximum(delta[self.nonneg], -x[self.nonneg])
+        return delta, opt_step_size, feas_step_size, init_step_size
+
     def _has_released(self) -> bool:
         """Return True if a bounded variable at 0 has a gradient asking it to grow.
 
