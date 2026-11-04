@@ -4,6 +4,7 @@ from typing import Any, Dict, List, Tuple, Union
 
 import numpy as np
 import pytest
+import scipy.optimize
 
 from dolphindes.cvxopt import BFGS, Alt_Newton_GD, OptimizationHyperparameters
 from dolphindes.types import ComplexArray, FloatNDArray
@@ -263,3 +264,50 @@ def test_newton_alternates_with_gradient_steps_above_threshold(alternate_above) 
         assert hess_requested == [i % 2 == 0 for i in range(len(hess_requested))]
     else:
         assert all(hess_requested)
+
+
+# (optimizer, newton_alternate_above): GCD runs Newton alternating with gradient steps
+SOLVERS = [(BFGS, 100), (Alt_Newton_GD, 100), (Alt_Newton_GD, 0)]
+SOLVER_IDS = ["bfgs", "newton", "newton-alternating"]
+
+@pytest.mark.parametrize("solver", SOLVERS, ids=SOLVER_IDS)
+@pytest.mark.parametrize("start", ["positive", "zeros"])
+def test_bounded_quadratic_matches_lbfgsb(solver, start):
+    """Minimize x^T A x - b^T x with every other x_j >= 0, compared with L-BFGS-B.
+
+    The "zeros" start puts every bounded variable at 0, including ones whose optimum
+    is positive, so those must be released from the fixed set.
+    """
+    rng = np.random.default_rng(0)
+    n = 20
+    Q, _ = np.linalg.qr(rng.standard_normal((n, n)))
+    A = Q @ np.diag(np.logspace(0, 3, n)) @ Q.T
+    b = rng.standard_normal(n)  # mixed signs, so several bounds end up active
+    nonneg = np.arange(n) % 2 == 0
+    x_ref = scipy.optimize.minimize(
+        lambda x: x @ A @ x - b @ x,
+        np.zeros(n),
+        jac=lambda x: 2 * A @ x - b,
+        method="L-BFGS-B",
+        bounds=[(0, None) if m else (None, None) for m in nonneg],
+        options=dict(ftol=1e-15, gtol=1e-12, maxiter=10000),
+    ).x
+    active = nonneg & (x_ref < 1e-10)
+    assert active.sum() >= 3 and np.any(nonneg & (x_ref > 1e-6))
+
+    def optfunc(x, get_grad=False, get_hess=False, penalty_vectors=[]):
+        return float(x @ A @ x - b @ x), 2 * A @ x - b, 2 * A, 0
+
+    x0 = 10 * rng.random(n)
+    if start == "zeros":
+        x0[nonneg] = 0.0
+    cls, alternate_above = solver
+    params = OptimizationHyperparameters(
+        opttol=1e-8, break_iter_period=20, newton_alternate_above=alternate_above
+    )
+    no_penalty = lambda x: (np.zeros_like(x), None)  # noqa: E731
+    opt = cls(optfunc, lambda x: True, no_penalty, True, params, nonneg)
+    x = opt.run(x0)[0]
+
+    assert np.allclose(x, x_ref, atol=1e-6)
+    assert np.all(x[nonneg] >= 0.0) and np.all(x[active] == 0.0)
