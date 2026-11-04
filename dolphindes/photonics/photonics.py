@@ -393,26 +393,24 @@ class Photonics_TM_FDFD(Photonics_FDFD):
 
         chigrid_dof, M_dof, es = self._get_dof_chigrid_M_es(dof)
 
+        # set_objective stores A0 and s0 in the weighted basis x = sqrt(W) p
+        sqrtW = np.sqrt(self.geometry.get_pixel_areas()[self._get_des_mask_flat()])
         et = self.ei[self.des_mask] + es
-        p = chigrid_dof[self.des_mask] * et
+        x = sqrtW * chigrid_dof[self.des_mask] * et
 
-        obj = np.real(-np.vdot(p, self.A0 @ p) + 2 * np.vdot(self.s0, p) + self.c0)
+        obj = np.real(-np.vdot(x, self.A0 @ x) + 2 * np.vdot(self.s0, x) + self.c0)
 
         if len(grad) > 0:
             Nx, Ny = self.geometry.get_grid_size()
+            # d(obj) = 2 Re[v^T dp] with v = sqrt(W) conj(s0 - A0 x)
+            v = sqrtW * np.conj(self.s0 - self.A0 @ x)
             adj_src: ComplexGrid = np.zeros((Nx, Ny), dtype=complex)
-            adj_src[self.des_mask] = chigrid_dof[self.des_mask] * np.conj(
-                self.s0 - self.A0 @ p
-            )
+            adj_src[self.des_mask] = chigrid_dof[self.des_mask] * v
             adj_v: ComplexArray = spla.spsolve(M_dof, adj_src.flatten())[
                 self.des_mask.flatten()
             ]
             grad[:] = 2 * np.real(
-                (
-                    self.chi * np.conj(self.s0 - self.A0 @ p)
-                    + self.omega**2 * self.chi * adj_v
-                )
-                * et
+                (self.chi * v + self.omega**2 * self.chi * adj_v) * et
             )
 
         return float(obj)
