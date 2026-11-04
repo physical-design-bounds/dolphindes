@@ -62,6 +62,11 @@ while we're pre-1.0, the public API may still change between minor releases.
   solve keeps their multipliers `>= 0`; write a `<=` constraint by negating `B_j`,
   `s_2j` and `c_2j`. Projector constraints remain equalities, and GCD and projector
   refinement, which only change projector constraints, work unchanged.
+- **Fixed:** with `sparseQCQP=False`, `structure_objective` applied `A0` and `s0` to
+  the polarization `p`, but `set_objective` stores them in the area-weighted basis
+  `x = sqrt(W) p` the dense QCQP uses. The design objective and its gradient were
+  therefore wrong whenever pixel areas differ from 1. It now evaluates them
+  on `x`. The sparse path was correct and is unchanged.
 
 ## [0.2.2] — 2026-07-29
 
