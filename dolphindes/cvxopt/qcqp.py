@@ -32,13 +32,15 @@ class SparseSharedProjQCQP(_SharedProjQCQP):
     are sparse. It supports:
       1. A family of "shared" (projection-structured) constraints defined through
          sparse projector matrices with shared sparsity structure.
-      2. An optional list of additional (general) quadratic equality constraints
-         parameterized by matrices B_j, vectors s_2j, and scalars c_2j.
+      2. An optional list of additional (general) quadratic constraints
+         parameterized by matrices B_j, vectors s_2j, and scalars c_2j, each an
+         equality or, where gen_ineq is set, an inequality (>= 0).
 
     Primal problem (maximization form):
         maximize_x   - x^† A0 x + 2 Re(x^† s0) + c0
         subject to   Re( - x^† A1 P_j A2 x + 2 x^† A2^† P_j^† s1 ) = 0     (shared)
                      Re( - x^† A2^† B_j A2 x + 2 x^† A2^† s_2j + c_2j ) = 0 (general)
+                                                              (or >= 0, see gen_ineq)
 
     Dual feasibility relies (heuristically) on at least one projector direction
     such that A0 + λ A1 P_j A2 becomes PSD for sufficiently large λ. This is not
@@ -69,6 +71,9 @@ class SparseSharedProjQCQP(_SharedProjQCQP):
         (Optional) array of constant terms for general constraints.
     verbose : int, default 0
         Verbosity level (≥1 prints preprocessing info).
+    gen_ineq : ArrayLike | None
+        (Optional) boolean mask over the general constraints marking those that are
+        inequalities (>= 0); their multipliers are kept >= 0. Default: all equalities.
 
     Attributes
     ----------
@@ -300,13 +305,17 @@ class DenseSharedProjQCQP(_SharedProjQCQP):
         list of 2D arrays representing the projector matrices P_j.
     A2 : ArrayLike | None, default None
         Right quadratic factor (defaults to identity if None).
+    B_j, s_2j, c_2j : optional
+        General constraints, as in SparseSharedProjQCQP.
     verbose : int, default 0
         Verbosity level.
+    gen_ineq : ArrayLike | None
+        (Optional) boolean mask over the general constraints marking those that are
+        inequalities (>= 0); their multipliers are kept >= 0. Default: all equalities.
 
     Notes
     -----
     - All quadratic matrices must be dense (or convertible) for this class.
-    - General constraints can be supplied via the base constructor if extended.
     """
 
     def __init__(
@@ -323,6 +332,7 @@ class DenseSharedProjQCQP(_SharedProjQCQP):
         s_2j: list[ArrayLike] | None = None,
         c_2j: ArrayLike | None = None,
         verbose: int = 0,
+        gen_ineq: ArrayLike | None = None,
     ):
         if A2 is None:
             n = int(np.asarray(s0).shape[0])
@@ -339,6 +349,7 @@ class DenseSharedProjQCQP(_SharedProjQCQP):
             B_j=B_j,
             s_2j=s_2j,
             c_2j=c_2j,
+            gen_ineq=gen_ineq,
             verbose=verbose,
         )
 

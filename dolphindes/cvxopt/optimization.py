@@ -6,7 +6,7 @@ from dataclasses import asdict, dataclass
 from typing import Any, Callable, Tuple, cast
 
 import numpy as np
-from numpy.typing import ArrayLike
+from numpy.typing import ArrayLike, NDArray
 
 from dolphindes.types import FloatNDArray
 
@@ -71,6 +71,8 @@ class _Optimizer:
         Boolean indicating if the optimization problem is convex.
     opt_params : OptimizationHyperparameters
         Optimization parameters.
+    nonneg : NDArray[np.bool_] | None, optional
+        Mask of the variables constrained to ``[0, inf)``; None leaves all free.
 
     Attributes
     ----------
@@ -106,6 +108,7 @@ class _Optimizer:
         penalty_vector_func: Callable[[FloatNDArray], Tuple[FloatNDArray, Any]],
         is_convex: bool,
         opt_params: OptimizationHyperparameters,
+        nonneg: NDArray[np.bool_] | None = None,
     ) -> None:
         self.optfunc = optfunc
         self.feasible_func = feasible_func
@@ -119,6 +122,14 @@ class _Optimizer:
         self.wall_step_func: (
             Callable[[FloatNDArray, FloatNDArray], float | None] | None
         ) = None
+
+        self.nonneg: NDArray[np.bool_] | None = None
+        if nonneg is not None:
+            mask = np.asarray(nonneg)
+            if mask.dtype != np.bool_:
+                raise TypeError(f"nonneg must be a boolean mask, not {mask.dtype}.")
+            if np.any(mask):
+                self.nonneg = mask
 
         self.penalty_ratio = self.opt_params.penalty_ratio
 
@@ -137,6 +148,176 @@ class _Optimizer:
     def get_last_opt(self) -> Tuple[FloatNDArray | None, float | None]:
         """Get the last optimized x and f(x) values."""
         return self.opt_x, self.opt_fx
+
+    def _check_feasible_start(self, x0: FloatNDArray) -> None:
+        """Check that the starting point x0 satisfies the nonnegativity constraints."""
+        if self.nonneg is None:
+            return
+        if self.nonneg.shape != x0.shape:
+            raise ValueError(
+                f"nonneg has shape {self.nonneg.shape}, but x0 has shape {x0.shape}."
+            )
+        violated = np.flatnonzero(self.nonneg & (x0 < 0.0))
+        if violated.size > 0:
+            raise ValueError(f"x0 is negative at nonneg indices {violated.tolist()}.")
+
+    def _descent_direction(
+        self,
+        x: FloatNDArray,
+        g: FloatNDArray,
+        M: FloatNDArray | None = None,
+        M_is_inverse: bool = False,
+    ) -> FloatNDArray:
+        """Return the search direction at x, keeping the nonnegativity bounds.
+
+        Without bounds, the direction is
+            M is None:                  gradient descent, -g
+            M is the Hessian H:         the Newton step, -H^-1 g
+            M_is_inverse (M ~ H^-1):    the BFGS step, -M g
+
+        With bounds, the variables at 0 that this step would push below 0 are held at
+        0 and the same kind of step is taken on the others (see the comments below).
+        The direction never pushes a variable at 0 below 0, and it is zero exactly at
+        a KKT point of the bounded problem, where the caller stops.
+
+        Parameters
+        ----------
+        x : FloatNDArray
+            Current point.
+        g : FloatNDArray
+            Gradient at x.
+        M : FloatNDArray | None, optional
+            Hessian at x, or with M_is_inverse the BFGS inverse-Hessian approximation.
+            None for gradient descent.
+        M_is_inverse : bool, optional
+            Whether M approximates the inverse Hessian rather than the Hessian.
+
+        Returns
+        -------
+        FloatNDArray
+            The search direction, not normalized.
+        """
+        if self.nonneg is None:
+            if M is None:
+                return -g
+            if M_is_inverse:
+                return -M @ g
+            return cast(FloatNDArray, np.linalg.solve(M, -g))
+
+        # Split the variables: a bounded variable at 0 with g_j > 0 would be pushed
+        # below 0 by descent, so it is held at 0 for this step (the fixed set B). All
+        # others are free (the set F). That includes a bounded variable at 0 with
+        # g_j <= 0, which descent pushes up: it is released from the bound.
+        at_bound = self.nonneg & (x <= 0.0)
+        free = ~(at_bound & (g > 0.0))
+        fixed, g_F = ~free, g[free]
+
+        # Take the step on F only, with B held at 0. Gradient descent: -g on F.
+        # Newton: solve H_FF d_F = -g_F. BFGS has M ~ H^-1 rather than H, and
+        # (H_FF)^-1 is not M_FF; by the block inverse,
+        # (H_FF)^-1 = M_FF - M_FB (M_BB)^-1 M_BF, which costs one |B| x |B| solve.
+        proj_grad = cast(FloatNDArray, np.where(free, -g, 0.0))
+        if M is None:
+            return proj_grad
+        d = np.zeros_like(g)
+        if M_is_inverse:
+            y = np.linalg.solve(M[np.ix_(fixed, fixed)], M[np.ix_(fixed, free)] @ g_F)
+            d[free] = M[np.ix_(free, fixed)] @ y - M[np.ix_(free, free)] @ g_F
+        else:
+            d[free] = np.linalg.solve(M[np.ix_(free, free)], -g_F)
+
+        # Clean up coupling: through the off-diagonal terms of H, the step can still
+        # push a released variable (at 0, g_j <= 0) below 0, so those components are
+        # dropped. This never costs descent: each dropped term g_j d_j is >= 0.
+        d[at_bound & (d < 0.0)] = 0.0
+
+        # Safeguard: g @ d >= 0 only if H_FF is not positive definite, or if g_F = 0.
+        # Fall back to the projected gradient then. It is zero exactly at a KKT point
+        # (g_j = 0 on F, g_j > 0 on B), so a zero direction means converged.
+        return d if g @ d < 0.0 else proj_grad
+
+    def _bounded_line_search(
+        self, xdir: FloatNDArray, step_size: float
+    ) -> Tuple[FloatNDArray, float, float, float]:
+        """Run _line_search along xdir, starting no further than the first bound.
+
+        Without bounds, this is _line_search from step_size, and the step is
+        opt_step_size * xdir.
+
+        With bounds, the search starts at the step where the first bounded variable
+        reaches 0, if that is shorter than step_size. _line_search only shortens the
+        step from where it starts, so no point it tries takes a bounded variable below
+        0, and a variable the step takes to 0 lands on exactly 0 (see the comments
+        below).
+
+        Parameters
+        ----------
+        xdir : FloatNDArray
+            Search direction from _descent_direction, normalized or not.
+        step_size : float
+            Step size to start from: the learned one, or 1 for a full Newton step.
+
+        Returns
+        -------
+        delta : FloatNDArray
+            The step to add to opt_x.
+        opt_step_size : float
+            Step size accepted by _line_search.
+        feas_step_size : float
+            Step size after backtracking for feasibility only, from _line_search.
+        init_step_size : float
+            Step size the search started from, min(step_size, step to the first
+            bound). Callers compare opt_step_size with this, not with step_size, to
+            tell whether the search backtracked.
+        """
+        x = cast(FloatNDArray, self.opt_x)
+
+        # Find the cap: the step at which the first bounded variable reaches 0. Only
+        # bounded variables that decrease along xdir can reach it, and none of those
+        # is at 0 (_descent_direction never pushes a variable at 0 below 0), so the
+        # cap is > 0. landing are the variables that set it, including those that
+        # reach 0 at the same step up to roundoff.
+        cap = np.inf
+        landing: NDArray[np.intp] = np.zeros(0, dtype=np.intp)
+        if self.nonneg is not None:
+            hits = np.flatnonzero(self.nonneg & (xdir < 0.0))
+            if hits.size > 0:
+                steps = x[hits] / -xdir[hits]
+                cap = float(np.min(steps))
+                landing = hits[steps <= cap * (1.0 + 1e-12)]
+
+        # Start the search at the cap if it is shorter than step_size. _line_search
+        # only shortens the step from where it starts (backtracking for feasibility,
+        # the jump to the PSD wall when that is shorter, backtracking on the value),
+        # so every point it tries keeps the bounded variables >= 0.
+        init_step_size = min(step_size, cap)
+        opt_step_size, feas_step_size = self._line_search(
+            xdir, x, cast(float, self.opt_fx), self.xgrad, init_step_size
+        )
+
+        # Land exactly on the bound: if the search kept the cap, x_j + cap * xdir_j
+        # is 0 only up to roundoff (~1e-17) for each landing variable. A variable
+        # left just above 0 would not count as at the bound next iteration and would
+        # cap the next step at a tiny length, so these are set to exactly 0
+        # (x + (-x) is exactly 0 in floating point). Roundoff below 0 on the other
+        # bounded variables is clipped.
+        delta = opt_step_size * xdir
+        if self.nonneg is not None:
+            if opt_step_size >= cap:
+                delta[landing] = -x[landing]
+            delta[self.nonneg] = np.maximum(delta[self.nonneg], -x[self.nonneg])
+        return delta, opt_step_size, feas_step_size, init_step_size
+
+    def _has_released(self) -> bool:
+        """Return True if a bounded variable at 0 has a gradient asking it to grow.
+
+        The stationarity test in ``_break_condition`` weighs each gradient entry by
+        ``|x_j|``, so it cannot see such a variable, although the point is not optimal.
+        """
+        if self.nonneg is None:
+            return False
+        x = cast(FloatNDArray, self.opt_x)
+        return bool(np.any(self.nonneg & (x <= 0.0) & (self.xgrad < 0.0)))
 
     def _line_search(
         self,
@@ -268,13 +449,14 @@ class BFGS(_Optimizer):
           as part of BFGS
     """
 
-    def __init__(self, *params: Any) -> None:
-        super().__init__(*params)
+    def __init__(self, *params: Any, **kwargs: Any) -> None:
+        super().__init__(*params, **kwargs)
 
     def _break_condition(self, iter_num: int, iter_type: str) -> bool:
         if iter_type == "inner":
-            # Directional stationarity residual convergence
-            if iter_num > self.opt_params.min_inner_iter:
+            # Directional stationarity residual convergence (blind to a bounded
+            # variable at 0 that should grow, see _has_released)
+            if iter_num > self.opt_params.min_inner_iter and not self._has_released():
                 function_value = cast(float, self.opt_fx)
                 opttol = self.opt_params.opttol
                 opt_x = cast(FloatNDArray, self.opt_x)
@@ -287,7 +469,9 @@ class BFGS(_Optimizer):
                     and np.abs(function_value - fminus_xxgrad)
                     < opttol * np.abs(fminus_xxgrad)
                     and np.abs(remaining_descent) < opttol * np.abs(fminus_xxgrad)
-                    and np.linalg.norm(self.xgrad) < opttol * np.abs(function_value)
+                    # projected gradient: entries held at 0 by their bound don't count
+                    and np.linalg.norm(self._descent_direction(opt_x, self.xgrad))
+                    < opttol * np.abs(function_value)
                 ):
                     return True
 
@@ -460,6 +644,7 @@ class BFGS(_Optimizer):
         x0 = np.asarray(x0, dtype=np.float64)
         self.opt_x = x0.copy()
         assert isinstance(self.opt_x, np.ndarray), "opt_x must be a numpy ndarray"
+        self._check_feasible_start(self.opt_x)
 
         self.ndof = self.opt_x.size
         self.xgrad = np.zeros(self.ndof, dtype=np.float64)
@@ -498,22 +683,31 @@ class BFGS(_Optimizer):
                 if self.verbose > 1:
                     print(f"Inner iteration {inner_iter_count}, opt_fx = {self.opt_fx}")
 
-                BFGS_dir = -Hinv @ self.xgrad
+                BFGS_dir = self._descent_direction(
+                    self.opt_x, self.xgrad, Hinv, M_is_inverse=True
+                )
+                if not np.any(BFGS_dir):
+                    break  # stationary, on the bounds if any: a KKT point
                 nBFGS_dir = BFGS_dir / np.linalg.norm(BFGS_dir)
 
-                opt_step_size, feas_step_size = self._line_search(
-                    nBFGS_dir, self.opt_x, self.opt_fx, self.xgrad, last_step_size
-                )  # Perform line search for step size
-                last_step_size, added_penalty = self._add_penalty(
+                delta, opt_step_size, feas_step_size, init_step_size = (
+                    self._bounded_line_search(nBFGS_dir, last_step_size)
+                )
+                next_step_size, added_penalty = self._add_penalty(
                     opt_step_size,
-                    last_step_size,
+                    init_step_size,
                     feas_step_size,
                     self.opt_x,
                     nBFGS_dir,
                     self.opt_fx,
                 )
+                # a step stopped by a bound says nothing about the next step size
+                if not (
+                    init_step_size < last_step_size
+                    and np.isclose(opt_step_size, init_step_size, atol=0.0)
+                ):
+                    last_step_size = next_step_size
 
-                delta = opt_step_size * nBFGS_dir
                 old_grad = self.xgrad.copy()  # Save old gradient before update
                 self.opt_x += delta
 
@@ -559,13 +753,14 @@ class Alt_Newton_GD(_Optimizer):
         - _break_condition() is implemented to check for convergence
     """
 
-    def __init__(self, *params: Any) -> None:
-        super().__init__(*params)
+    def __init__(self, *params: Any, **kwargs: Any) -> None:
+        super().__init__(*params, **kwargs)
 
     def _break_condition(self, iter_num: int, iter_type: str) -> bool:
         if iter_type == "inner":
-            # Directional stationarity residual convergence
-            if iter_num > self.opt_params.min_inner_iter:
+            # Directional stationarity residual convergence (blind to a bounded
+            # variable at 0 that should grow, see _has_released)
+            if iter_num > self.opt_params.min_inner_iter and not self._has_released():
                 function_value = cast(float, self.opt_fx)
                 opttol = self.opt_params.opttol
                 opt_x = cast(FloatNDArray, self.opt_x)
@@ -584,7 +779,9 @@ class Alt_Newton_GD(_Optimizer):
                     and np.abs(function_value - fminus_xxgrad)
                     < opttol * np.abs(fminus_xxgrad)
                     and np.abs(remaining_descent) < opttol * np.abs(fminus_xxgrad)
-                    and np.linalg.norm(self.xgrad) < opttol * np.abs(function_value)
+                    # projected gradient: entries held at 0 by their bound don't count
+                    and np.linalg.norm(self._descent_direction(opt_x, self.xgrad))
+                    < opttol * np.abs(function_value)
                 ):
                     return True
 
@@ -690,6 +887,7 @@ class Alt_Newton_GD(_Optimizer):
         """
         x0_arr = np.asarray(x0, dtype=np.float64)
         self.opt_x = x0_arr.copy()
+        self._check_feasible_start(self.opt_x)
         self.ndof = x0_arr.size
         self.xgrad = np.zeros(self.ndof, dtype=np.float64)
         self.xhess: FloatNDArray = np.zeros((self.ndof, self.ndof), dtype=np.float64)
@@ -742,14 +940,10 @@ class Alt_Newton_GD(_Optimizer):
                 # unless alternating
                 if doN:
                     try:
-                        xdir = cast(
-                            FloatNDArray, np.linalg.solve(self.xhess, -self.xgrad)
+                        xdir = self._descent_direction(
+                            self.opt_x, self.xgrad, self.xhess
                         )
-                        if alternate:
-                            xdir = xdir / np.linalg.norm(xdir)
-                            last_step_size = last_N_step_size
-                        else:
-                            last_step_size = 1.0
+                        last_step_size = last_N_step_size if alternate else 1.0
                         if self.verbose >= 2:
                             print("doing Newton step")
                     except np.linalg.LinAlgError:
@@ -760,20 +954,31 @@ class Alt_Newton_GD(_Optimizer):
                 if not doN:
                     if self.verbose >= 2:
                         print("doing GD step")
-                    xdir = -self.xgrad / np.linalg.norm(self.xgrad)
+                    xdir = self._descent_direction(self.opt_x, self.xgrad)
                     last_step_size = last_GD_step_size
 
-                opt_step_size, feas_step_size = self._line_search(
-                    xdir, self.opt_x, self.opt_fx, self.xgrad, last_step_size
+                if not np.any(xdir):
+                    break  # stationary, on the bounds if any: a KKT point
+                if alternate or not doN:
+                    xdir = xdir / np.linalg.norm(xdir)
+
+                delta, opt_step_size, feas_step_size, init_step_size = (
+                    self._bounded_line_search(xdir, last_step_size)
                 )
-                last_step_size = self._update_stepsize_add_penalty(
+                next_step_size = self._update_stepsize_add_penalty(
                     opt_step_size,
-                    last_step_size,
+                    init_step_size,
                     feas_step_size,
                     self.opt_x,
                     xdir,
                     self.opt_fx,
                 )
+                # a step stopped by a bound says nothing about the next step size
+                if not (
+                    init_step_size < last_step_size
+                    and np.isclose(opt_step_size, init_step_size, atol=0.0)
+                ):
+                    last_step_size = next_step_size
 
                 if not doN:
                     last_GD_step_size = last_step_size
@@ -781,7 +986,7 @@ class Alt_Newton_GD(_Optimizer):
                     last_N_step_size = last_step_size
 
                 # move on to the next iteration
-                self.opt_x += opt_step_size * xdir
+                self.opt_x += delta
                 inner_iter_count += 1
 
             # outer iteration check convergence, reduce penalties, and update iter count

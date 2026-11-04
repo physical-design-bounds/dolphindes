@@ -4,6 +4,7 @@ from typing import Any, Dict, List, Tuple, Union
 
 import numpy as np
 import pytest
+import scipy.optimize
 
 from dolphindes.cvxopt import BFGS, Alt_Newton_GD, OptimizationHyperparameters
 from dolphindes.types import ComplexArray, FloatNDArray
@@ -263,3 +264,153 @@ def test_newton_alternates_with_gradient_steps_above_threshold(alternate_above) 
         assert hess_requested == [i % 2 == 0 for i in range(len(hess_requested))]
     else:
         assert all(hess_requested)
+
+
+# (optimizer, newton_alternate_above): GCD runs Newton alternating with gradient steps
+SOLVERS = [(BFGS, 100), (Alt_Newton_GD, 100), (Alt_Newton_GD, 0)]
+SOLVER_IDS = ["bfgs", "newton", "newton-alternating"]
+
+
+def _bounded_quadratic(n=20, seed=0):
+    """Ill-conditioned x^T A x - b^T x with every other x_j >= 0; returns A, b, mask, x0."""
+    rng = np.random.default_rng(seed)
+    Q, _ = np.linalg.qr(rng.standard_normal((n, n)))
+    A = Q @ np.diag(np.logspace(0, 3, n)) @ Q.T
+    b = rng.standard_normal(n)  # mixed signs, so several bounds end up active
+    nonneg = np.arange(n) % 2 == 0
+    return A, b, nonneg, 10 * rng.random(n)
+
+
+@pytest.mark.parametrize("solver", SOLVERS, ids=SOLVER_IDS)
+@pytest.mark.parametrize("start", ["positive", "zeros"])
+def test_bounded_quadratic_matches_lbfgsb(solver, start):
+    """Minimize x^T A x - b^T x with every other x_j >= 0, compared with L-BFGS-B.
+
+    The "zeros" start puts every bounded variable at 0, including ones whose optimum
+    is positive, so those must be released from the fixed set.
+    """
+    A, b, nonneg, x0 = _bounded_quadratic()
+    n = b.size
+    x_ref = scipy.optimize.minimize(
+        lambda x: x @ A @ x - b @ x,
+        np.zeros(n),
+        jac=lambda x: 2 * A @ x - b,
+        method="L-BFGS-B",
+        bounds=[(0, None) if m else (None, None) for m in nonneg],
+        options=dict(ftol=1e-15, gtol=1e-12, maxiter=10000),
+    ).x
+    active = nonneg & (x_ref < 1e-10)
+    assert active.sum() >= 3 and np.any(nonneg & (x_ref > 1e-6))
+
+    def optfunc(x, get_grad=False, get_hess=False, penalty_vectors=[]):
+        return float(x @ A @ x - b @ x), 2 * A @ x - b, 2 * A, 0
+
+    if start == "zeros":
+        x0[nonneg] = 0.0
+    cls, alternate_above = solver
+    params = OptimizationHyperparameters(
+        opttol=1e-8, break_iter_period=20, newton_alternate_above=alternate_above
+    )
+    no_penalty = lambda x: (np.zeros_like(x), None)  # noqa: E731
+    opt = cls(optfunc, lambda x: True, no_penalty, True, params, nonneg)
+    x = opt.run(x0)[0]
+
+    assert np.allclose(x, x_ref, atol=1e-6)
+    assert np.all(x[nonneg] >= 0.0) and np.all(x[active] == 0.0)
+
+
+@pytest.mark.parametrize("solver", SOLVERS, ids=SOLVER_IDS)
+def test_bounded_tied_variables_land_on_zero(solver):
+    """Variables that reach 0 at the same step all land on exactly 0 in that step.
+
+    Minimizes sum (x_j + 1)^2 with every x_j >= 0 from x = 1, where every step
+    direction is uniform, so all 30 bounds are hit at once.
+    """
+    n_grad = 0
+
+    def optfunc(x, get_grad=False, get_hess=False, penalty_vectors=[]):
+        nonlocal n_grad
+        n_grad += get_grad
+        return float(np.sum((x + 1) ** 2)), 2 * (x + 1), 2 * np.eye(x.size), 0
+
+    cls, alternate_above = solver
+    params = OptimizationHyperparameters(
+        opttol=1e-8, break_iter_period=20, newton_alternate_above=alternate_above
+    )
+    no_penalty = lambda x: (np.zeros_like(x), None)  # noqa: E731
+    opt = cls(
+        optfunc, lambda x: True, no_penalty, True, params, nonneg=np.ones(30, bool)
+    )
+    x = opt.run(np.ones(30))[0]
+
+    assert np.all(x == 0.0)
+    assert n_grad < 10
+
+
+def test_nonneg_mask_validation():
+    """The mask must be boolean and match x0; x0 must be >= 0 where it is set."""
+    args = (
+        lambda x, **kwargs: (0.0, np.zeros_like(x), np.eye(x.size), None),
+        lambda x: True,
+        lambda x: (np.zeros_like(x), None),
+        True,
+        OptimizationHyperparameters(),
+    )
+    with pytest.raises(TypeError, match="boolean"):
+        BFGS(*args, nonneg=[0])  # an index list, not a mask
+    opt = Alt_Newton_GD(*args, nonneg=np.array([True, False]))
+    with pytest.raises(ValueError, match="shape"):
+        opt.run(np.ones(3))
+    with pytest.raises(ValueError, match="negative"):
+        opt.run(np.array([-1.0, 0.0]))
+
+
+@pytest.mark.parametrize("solver", SOLVERS, ids=SOLVER_IDS)
+def test_bounded_stopping_sees_variable_to_release(solver):
+    """A variable at 0 whose gradient says it should grow keeps the run going.
+
+    Minimizes |x - 1|^2 with x_2 >= 0 from x = [1, 0]. The stationarity test weighs
+    each gradient entry by |x_j|, so on its own it would stop at once, at [1, 0].
+    """
+
+    def optfunc(x, get_grad=False, get_hess=False, penalty_vectors=[]):
+        return float(np.sum((x - 1) ** 2)), 2 * (x - 1), 2 * np.eye(2), 0
+
+    cls, alternate_above = solver
+    params = OptimizationHyperparameters(
+        opttol=1e-8, min_inner_iter=0, newton_alternate_above=alternate_above
+    )
+    no_penalty = lambda x: (np.zeros_like(x), None)  # noqa: E731
+    nonneg = np.array([False, True])
+    opt = cls(optfunc, lambda x: True, no_penalty, True, params, nonneg=nonneg)
+    x = opt.run(np.array([1.0, 0.0]))[0]
+
+    assert np.allclose(x, [1.0, 1.0])
+
+
+def test_bounded_grad_converge_ignores_gradient_held_at_bound():
+    """With gradConverge, the gradient-norm test leaves out entries held at 0.
+
+    Those entries stay > 0 at the solution, so if they counted the test could never
+    pass, and Newton would run on until the periodic objective test.
+    """
+    A, b, nonneg, x0 = _bounded_quadratic()
+    results = {}
+    for grad_converge in (False, True):
+        count = 0
+
+        def optfunc(x, get_grad=False, get_hess=False, penalty_vectors=[]):
+            nonlocal count
+            count += 1
+            return float(x @ A @ x - b @ x), 2 * A @ x - b, 2 * A, 0
+
+        params = OptimizationHyperparameters(
+            opttol=1e-8, break_iter_period=20, gradConverge=grad_converge
+        )
+        no_penalty = lambda x: (np.zeros_like(x), None)  # noqa: E731
+        opt = Alt_Newton_GD(optfunc, lambda x: True, no_penalty, True, params, nonneg)
+        results[grad_converge] = opt.run(x0.copy())[0], count
+
+    (x_plain, n_plain), (x_grad, n_grad) = results[False], results[True]
+    assert np.allclose(x_grad, x_plain, atol=1e-8)
+    assert n_grad <= n_plain + 2
