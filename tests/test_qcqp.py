@@ -1277,3 +1277,224 @@ def test_invalid_metric_raises(sparse_qcqp_data):
 
     assert qcqp.n_proj_constr == n_before
     assert np.array_equal(qcqp.current_lags, lags_before)
+
+
+# --- general inequality constraints (gen_ineq) ---
+
+# (method, newton_alternate_above): BFGS, Newton taking full steps, and Newton
+# alternating with gradient steps, as it does above 100 multipliers
+INEQ_SOLVERS = [("bfgs", 100), ("newton", 100), ("newton", 0)]
+INEQ_SOLVER_IDS = ["bfgs", "newton", "newton-alternating"]
+
+
+def _solve_tight(qcqp, solver, init_lags):
+    """Solve the dual to tight tolerance; return (dual, lags)."""
+    method, alternate_above = solver
+    params = OptimizationHyperparameters(
+        opttol=1e-8, break_iter_period=20, newton_alternate_above=alternate_above
+    )
+    dual, lags, _, _, _ = qcqp.solve_current_dual_problem(
+        method, opt_params=params, init_lags=init_lags
+    )
+    return dual, lags
+
+
+def _norm_bound_qcqp(s0, c0, A0, bounds, gen_ineq):
+    """QCQP whose only constraints are |x|^2 <= b (or = b) for each b in bounds."""
+    n = len(s0)
+    eye = np.eye(n, dtype=complex)
+    return DenseSharedProjQCQP(
+        A0,
+        s0,
+        c0,
+        0 * eye,
+        np.zeros(n, dtype=complex),
+        [],
+        sp.eye_array(n, format="csc"),
+        B_j=[eye] * len(bounds),
+        s_2j=[np.zeros(n, dtype=complex)] * len(bounds),
+        c_2j=bounds,
+        gen_ineq=gen_ineq,
+    )
+
+
+@pytest.mark.parametrize("solver", INEQ_SOLVERS, ids=INEQ_SOLVER_IDS)
+def test_general_inequality_sign_convention(solver):
+    """Toy problems with known multipliers: an inequality's multiplier stays >= 0."""
+    eye2 = np.eye(2, dtype=complex)
+
+    # max -|x - a|^2 s.t. |x|^2 <= 1 with |a| = 0.5: the constraint is inactive. As an
+    # equality (|x|^2 = 1) the bound is -0.25 at multiplier -0.5; as an inequality the
+    # multiplier stays at exactly 0 and the bound is 0.
+    a = np.array([0.3, 0.4], dtype=complex)
+    qcqp = _norm_bound_qcqp(a, -0.25, eye2, [1.0], [False])
+    dual, lags = _solve_tight(qcqp, solver, [1.0])
+    assert np.isclose(dual, -0.25, atol=1e-7) and np.isclose(lags[0], -0.5, atol=1e-5)
+    qcqp = _norm_bound_qcqp(a, -0.25, eye2, [1.0], [True])
+    dual, lags = _solve_tight(qcqp, solver, [1.0])
+    assert np.isclose(dual, 0.0, atol=1e-10) and lags[0] == 0.0
+
+    # max Re(x_1 + x_2) s.t. |x|^2 <= 1 and |x|^2 <= 4: only the tighter one is active
+    s0 = 0.5 * np.ones(2, dtype=complex)
+    qcqp = _norm_bound_qcqp(s0, 0.0, 0 * eye2, [1.0, 4.0], [True, True])
+    dual, lags = _solve_tight(qcqp, solver, [1.0, 1.0])
+    assert np.isclose(dual, np.sqrt(2), rtol=1e-7)
+    assert np.isclose(lags[0], 1 / np.sqrt(2), rtol=1e-6) and lags[1] == 0.0
+
+
+def _wall_qcqp(gen_ineq=None, keep=None, n=40, k=8, m=4, seed=3, a0_shift=0.05):
+    """Dense QCQP with k diagonal projectors, m general constraints and near-singular A0.
+
+    A0 is scaled so that the PSD wall binds at the dual optimum, unless a0_shift is
+    made large (30 moves the optimum well inside). The general constraints have
+    c_2j = 0, so x = 0 satisfies every constraint and each variant
+    (equality, inequality, dropped) has a finite dual. keep lists the general
+    constraints to include (default all); gen_ineq is a mask over all m of them.
+    """
+    rng = np.random.default_rng(seed)
+
+    def rc(*shape):
+        return rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+
+    M = rc(n, n)
+    A0 = M.conj().T @ M / n + a0_shift * np.eye(n)
+    A1, s0, s1 = rc(n, n), rc(n), rc(n)
+    Pdiags = rc(n, k)
+    Pdiags[rng.random((n, k)) < 0.3] = 0.0
+    Projlist = [sp.diags_array(Pdiags[:, j], format="csc") for j in range(k)]
+    B_j = [(H + H.conj().T) / (2 * np.sqrt(n)) for H in (rc(n, n) for _ in range(m))]
+    s_2j = [rc(n) for _ in range(m)]
+    keep = list(range(m)) if keep is None else list(keep)
+    return DenseSharedProjQCQP(
+        A0,
+        s0,
+        0.0,
+        A1,
+        s1,
+        Projlist,
+        sp.eye_array(n, format="csc"),
+        B_j=[B_j[j] for j in keep],
+        s_2j=[s_2j[j] for j in keep],
+        c_2j=np.zeros(len(keep)),
+        gen_ineq=None if gen_ineq is None else [gen_ineq[j] for j in keep],
+    )
+
+
+@pytest.mark.parametrize("solver", INEQ_SOLVERS, ids=INEQ_SOLVER_IDS)
+def test_general_inequality_against_equality_and_dropped(solver):
+    """With the PSD wall binding, constraint j as an inequality gives the equality dual
+    if its multiplier there is >= 0, and otherwise the dual with j dropped, with its
+    multiplier exactly 0: the dual is convex, so when the unbounded optimum has
+    mu_j < 0 the optimum over mu_j >= 0 lies on mu_j = 0."""
+    k, m = 8, 4
+    x0 = np.concatenate([np.full(k, 1e-6), np.zeros(m)])
+    qcqp = _wall_qcqp()
+    dual_eq, lags_eq = _solve_tight(qcqp, solver, x0)
+    mu_eq = lags_eq[k:]
+    assert np.any(mu_eq < 0) and np.any(mu_eq > 0), "fixture should cover both cases"
+    eigs = np.linalg.eigvalsh(qcqp._get_total_A(lags_eq))
+    assert eigs[0] < 1e-6 * eigs[-1], "fixture should have the PSD wall binding"
+
+    for j in range(m):
+        dual, lags = _solve_tight(_wall_qcqp(gen_ineq=np.arange(m) == j), solver, x0)
+        assert lags[k + j] >= 0.0
+        if mu_eq[j] >= 0:
+            assert np.isclose(dual, dual_eq, rtol=1e-7)
+        else:
+            others = [i for i in range(m) if i != j]
+            dropped = _wall_qcqp(keep=others)
+            dual_drop, _ = _solve_tight(dropped, solver, np.delete(x0, k + j))
+            assert np.isclose(dual, dual_drop, rtol=1e-7)
+            assert lags[k + j] == 0.0
+
+    # all inequalities at once: a relaxation of the equalities, a restriction of
+    # dropping them all, and some bounds active
+    dual, lags = _solve_tight(_wall_qcqp(gen_ineq=[True] * m), solver, x0)
+    dual_none, _ = _solve_tight(_wall_qcqp(keep=[]), solver, x0[:k])
+    assert dual_eq * (1 - 1e-7) <= dual <= dual_none * (1 + 1e-7)
+    assert np.all(lags[k:] >= 0.0) and np.any(lags[k:] == 0.0)
+
+
+@pytest.mark.parametrize("solver", INEQ_SOLVERS, ids=INEQ_SOLVER_IDS)
+def test_general_inequality_complementary_slackness_off_the_wall(solver):
+    """Off the PSD wall the dual's gradient is the constraint values f_j(x*), so at the
+    optimum f_j(x*) = 0 for the equalities and for inequalities with mu_j > 0, and
+    f_j(x*) >= 0 where mu_j = 0: x* is primal feasible and attains the bound. On the
+    wall the gradient also carries the wall's normal, and none of this need hold."""
+    k, m = 8, 4
+    qcqp = _wall_qcqp(gen_ineq=[True] * m, a0_shift=30.0)
+    x0 = np.concatenate([np.full(k, 1e-6), np.zeros(m)])
+    dual, lags = _solve_tight(qcqp, solver, x0)
+    eigs = np.linalg.eigvalsh(qcqp._get_total_A(lags))
+    assert eigs[0] > 0.1 * eigs[-1], "fixture should have the optimum off the wall"
+
+    mu, grad = lags[k:], qcqp.current_grad
+    assert np.all(mu >= 0.0) and np.any(mu == 0.0) and np.any(mu > 0.0)
+    tol = 1e-6 * max(1.0, abs(dual))
+    free = np.concatenate([np.ones(k, dtype=bool), mu > 0.0])
+    assert np.all(np.abs(grad[free]) < tol)  # equalities and active inequalities
+    assert np.all(grad[k:][mu == 0.0] > 0.0)  # inactive inequalities hold strictly
+    assert np.all(np.abs(mu * grad[k:]) < tol)
+
+    x = qcqp.current_xstar
+    primal = np.real(-x.conj() @ qcqp.A0 @ x + 2 * x.conj() @ qcqp.s0) + qcqp.c0
+    assert np.isclose(primal, dual, rtol=1e-6)
+
+
+def test_run_gcd_keeps_general_inequality(sparse_qcqp_data):
+    """GCD only changes projector constraints, so a power bound |A2 x|^2 <= P marked
+    as an inequality keeps its place and its sign through GCD: its multiplier ends
+    > 0 when the bound cuts off the unconstrained optimum, and exactly 0 when not."""
+    d = sparse_qcqp_data
+    Pdiags = d["Pdiags"]
+    Projlist = [
+        sp.diags_array(Pdiags[:, j], format="csc") for j in range(Pdiags.shape[1])
+    ]
+    params = GCDHyperparameters(
+        max_gcd_iter_num=6, max_proj_cstrt_num=6, gcd_iter_period=5, gcd_tol=1e-3
+    )
+
+    def ldos_qcqp(**general):
+        return SparseSharedProjQCQP(
+            d["A0"], d["s0"], d["c"], d["A1"], d["A2"], d["s1"], Projlist,
+            Projlist[0], verbose=0, **general,
+        )  # fmt: skip
+
+    free = ldos_qcqp()
+    free.run_gcd(params)
+    power = np.linalg.norm(d["A2"] @ free.current_xstar) ** 2
+    m = d["A2"].shape[0]
+
+    for factor, active in [(0.5, True), (2.0, False)]:
+        qcqp = ldos_qcqp(
+            B_j=[sp.eye_array(m, format="csc", dtype=complex)],
+            s_2j=[np.zeros(m, dtype=complex)],
+            c_2j=[factor * power],
+            gen_ineq=[True],
+        )
+        qcqp.run_gcd(params)
+        assert qcqp.n_gen_constr == 1 and list(qcqp.gen_ineq) == [True]
+        assert len(qcqp.current_lags) == qcqp.n_proj_constr + 1
+        mu = qcqp.current_lags[-1]
+        assert mu > 0.0 if active else mu == 0.0
+
+
+def test_gen_ineq_validation_and_mask():
+    """gen_ineq must match the general constraints; the bounded mask is in lags order."""
+    eye2 = np.eye(2, dtype=complex)
+    s0 = np.ones(2, dtype=complex)
+    with pytest.raises(ValueError, match="gen_ineq"):
+        _norm_bound_qcqp(s0, 0.0, eye2, [1.0], [True, False])
+
+    # without inequalities the optimizer runs unbounded, exactly as before
+    assert _norm_bound_qcqp(s0, 0.0, eye2, [1.0], None)._nonneg_mask() is None
+    assert _norm_bound_qcqp(s0, 0.0, eye2, [1.0], [False])._nonneg_mask() is None
+
+    # projector multipliers first (never bounded), then the general ones
+    mask = _wall_qcqp(gen_ineq=[False, True, False, True])._nonneg_mask()
+    assert np.array_equal(mask, [False] * 8 + [False, True, False, True])
+
+    # an inequality's multiplier must start >= 0
+    qcqp = _norm_bound_qcqp(s0, 0.0, eye2, [1.0], [True])
+    with pytest.raises(ValueError, match="negative"):
+        qcqp.solve_current_dual_problem("newton", init_lags=[-0.5])

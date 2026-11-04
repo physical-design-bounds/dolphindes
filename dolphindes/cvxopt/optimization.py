@@ -124,8 +124,12 @@ class _Optimizer:
         ) = None
 
         self.nonneg: NDArray[np.bool_] | None = None
-        if nonneg is not None and np.any(nonneg):
-            self.nonneg = np.asarray(nonneg, dtype=bool)
+        if nonneg is not None:
+            mask = np.asarray(nonneg)
+            if mask.dtype != np.bool_:
+                raise TypeError(f"nonneg must be a boolean mask, not {mask.dtype}.")
+            if np.any(mask):
+                self.nonneg = mask
 
         self.penalty_ratio = self.opt_params.penalty_ratio
 
@@ -149,6 +153,10 @@ class _Optimizer:
         """Check that the starting point x0 satisfies the nonnegativity constraints."""
         if self.nonneg is None:
             return
+        if self.nonneg.shape != x0.shape:
+            raise ValueError(
+                f"nonneg has shape {self.nonneg.shape}, but x0 has shape {x0.shape}."
+            )
         violated = np.flatnonzero(self.nonneg & (x0 < 0.0))
         if violated.size > 0:
             raise ValueError(f"x0 is negative at nonneg indices {violated.tolist()}.")
@@ -266,14 +274,16 @@ class _Optimizer:
         # Find the cap: the step at which the first bounded variable reaches 0. Only
         # bounded variables that decrease along xdir can reach it, and none of those
         # is at 0 (_descent_direction never pushes a variable at 0 below 0), so the
-        # cap is > 0. k is the variable that sets it.
-        cap, k = np.inf, -1
+        # cap is > 0. landing are the variables that set it, including those that
+        # reach 0 at the same step up to roundoff.
+        cap = np.inf
+        landing: NDArray[np.intp] = np.zeros(0, dtype=np.intp)
         if self.nonneg is not None:
             hits = np.flatnonzero(self.nonneg & (xdir < 0.0))
             if hits.size > 0:
                 steps = x[hits] / -xdir[hits]
-                i = int(np.argmin(steps))
-                cap, k = float(steps[i]), int(hits[i])
+                cap = float(np.min(steps))
+                landing = hits[steps <= cap * (1.0 + 1e-12)]
 
         # Start the search at the cap if it is shorter than step_size. _line_search
         # only shortens the step from where it starts (backtracking for feasibility,
@@ -284,15 +294,16 @@ class _Optimizer:
             xdir, x, cast(float, self.opt_fx), self.xgrad, init_step_size
         )
 
-        # Land exactly on the bound: if the search kept the cap, x_k + cap * xdir_k
-        # is 0 only up to roundoff (~1e-17). A variable left just above 0 would not
-        # count as at the bound next iteration and would cap the next step at a tiny
-        # length, so x_k is set to exactly 0 (x + (-x) is exactly 0 in floating
-        # point). Roundoff below 0 on the other bounded variables is clipped.
+        # Land exactly on the bound: if the search kept the cap, x_j + cap * xdir_j
+        # is 0 only up to roundoff (~1e-17) for each landing variable. A variable
+        # left just above 0 would not count as at the bound next iteration and would
+        # cap the next step at a tiny length, so these are set to exactly 0
+        # (x + (-x) is exactly 0 in floating point). Roundoff below 0 on the other
+        # bounded variables is clipped.
         delta = opt_step_size * xdir
         if self.nonneg is not None:
             if opt_step_size >= cap:
-                delta[k] = -x[k]
+                delta[landing] = -x[landing]
             delta[self.nonneg] = np.maximum(delta[self.nonneg], -x[self.nonneg])
         return delta, opt_step_size, feas_step_size, init_step_size
 
@@ -437,8 +448,8 @@ class BFGS(_Optimizer):
           as part of BFGS
     """
 
-    def __init__(self, *params: Any) -> None:
-        super().__init__(*params)
+    def __init__(self, *params: Any, **kwargs: Any) -> None:
+        super().__init__(*params, **kwargs)
 
     def _break_condition(self, iter_num: int, iter_type: str) -> bool:
         if iter_type == "inner":
@@ -739,8 +750,8 @@ class Alt_Newton_GD(_Optimizer):
         - _break_condition() is implemented to check for convergence
     """
 
-    def __init__(self, *params: Any) -> None:
-        super().__init__(*params)
+    def __init__(self, *params: Any, **kwargs: Any) -> None:
+        super().__init__(*params, **kwargs)
 
     def _break_condition(self, iter_num: int, iter_type: str) -> bool:
         if iter_type == "inner":

@@ -57,6 +57,11 @@ while we're pre-1.0, the public API may still change between minor releases.
 - **New:** `BFGS` and `Alt_Newton_GD` accept `nonneg=mask` to keep selected variables
   in `[0, ∞)`. It is an active-set method: a variable at 0 whose gradient points out
   of the box is held fixed while the Newton or BFGS step is taken on the rest.
+- **New:** general (`B_j`) constraints can be inequalities. `gen_ineq=mask` marks the
+  ones that read `Re(-x† A2† B_j A2 x + 2 x† A2† s_2j + c_2j) >= 0`, and the dual
+  solve keeps their multipliers `>= 0`; write a `<=` constraint by negating `B_j`,
+  `s_2j` and `c_2j`. Projector constraints remain equalities, and GCD and projector
+  refinement, which only change projector constraints, work unchanged.
 
 ## [0.2.2] — 2026-07-29
 
