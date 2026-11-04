@@ -270,6 +270,7 @@ def test_newton_alternates_with_gradient_steps_above_threshold(alternate_above) 
 SOLVERS = [(BFGS, 100), (Alt_Newton_GD, 100), (Alt_Newton_GD, 0)]
 SOLVER_IDS = ["bfgs", "newton", "newton-alternating"]
 
+
 @pytest.mark.parametrize("solver", SOLVERS, ids=SOLVER_IDS)
 @pytest.mark.parametrize("start", ["positive", "zeros"])
 def test_bounded_quadratic_matches_lbfgsb(solver, start):
@@ -311,3 +312,49 @@ def test_bounded_quadratic_matches_lbfgsb(solver, start):
 
     assert np.allclose(x, x_ref, atol=1e-6)
     assert np.all(x[nonneg] >= 0.0) and np.all(x[active] == 0.0)
+
+
+@pytest.mark.parametrize("solver", SOLVERS, ids=SOLVER_IDS)
+def test_bounded_tied_variables_land_on_zero(solver):
+    """Variables that reach 0 at the same step all land on exactly 0 in that step.
+
+    Minimizes sum (x_j + 1)^2 with every x_j >= 0 from x = 1, where every step
+    direction is uniform, so all 30 bounds are hit at once.
+    """
+    n_grad = 0
+
+    def optfunc(x, get_grad=False, get_hess=False, penalty_vectors=[]):
+        nonlocal n_grad
+        n_grad += get_grad
+        return float(np.sum((x + 1) ** 2)), 2 * (x + 1), 2 * np.eye(x.size), 0
+
+    cls, alternate_above = solver
+    params = OptimizationHyperparameters(
+        opttol=1e-8, break_iter_period=20, newton_alternate_above=alternate_above
+    )
+    no_penalty = lambda x: (np.zeros_like(x), None)  # noqa: E731
+    opt = cls(
+        optfunc, lambda x: True, no_penalty, True, params, nonneg=np.ones(30, bool)
+    )
+    x = opt.run(np.ones(30))[0]
+
+    assert np.all(x == 0.0)
+    assert n_grad < 10
+
+
+def test_nonneg_mask_validation():
+    """The mask must be boolean and match x0; x0 must be >= 0 where it is set."""
+    args = (
+        lambda x, **kwargs: (0.0, np.zeros_like(x), np.eye(x.size), None),
+        lambda x: True,
+        lambda x: (np.zeros_like(x), None),
+        True,
+        OptimizationHyperparameters(),
+    )
+    with pytest.raises(TypeError, match="boolean"):
+        BFGS(*args, nonneg=[0])  # an index list, not a mask
+    opt = Alt_Newton_GD(*args, nonneg=np.array([True, False]))
+    with pytest.raises(ValueError, match="shape"):
+        opt.run(np.ones(3))
+    with pytest.raises(ValueError, match="negative"):
+        opt.run(np.array([-1.0, 0.0]))

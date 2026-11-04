@@ -37,9 +37,15 @@ class _SharedProjQCQP(ABC):
     Primal problem (maximization form):
         maximize_x   - x^† A0 x + 2 Re(x^† s0) + c0
         subject to   Re( - x^† A1 P_j A2 x + 2 x^† A2^† P_j^† s1 ) = 0
-                     Re( - x^† A2^† B_j A2 x + 2 x^† A2^† s_2j + c_2j ) = 0
+                     Re( - x^† A2^† B_j A2 x + 2 x^† A2^† s_2j + c_2j ) = 0  (or >= 0)
 
     where the P_j are projection matrices with shared sparsity structure.
+
+    A general constraint marked in ``gen_ineq`` is the inequality ``>= 0``, and the
+    dual keeps its multiplier mu_j >= 0: for a feasible x the term mu_j f_j(x) in the
+    Lagrangian is then >= 0, so the dual remains an upper bound. Write a ``<= 0``
+    constraint by negating B_j, s_2j and c_2j. Projector constraints are always
+    equalities.
     The matrices used internally for the shared (projector) constraints are
     symmetrized via Sym(A1 P_j A2) to ensure Hermitian structure.
 
@@ -68,6 +74,8 @@ class _SharedProjQCQP(ABC):
         Linear term vectors for general constraints.
     c_2j : ArrayLike
         Constant terms for general constraints.
+    gen_ineq : NDArray[np.bool_]
+        Which general constraints are inequalities (``>= 0``); all False by default.
     Proj : :class:`dolphindes.util.Projectors`
         dolphindes Projectors object representing all projector matrices P_j.
     verbose : int
@@ -110,6 +118,7 @@ class _SharedProjQCQP(ABC):
         B_j: list[SparseDense] | None = None,
         s_2j: list[ArrayLike] | None = None,
         c_2j: ArrayLike | None = None,
+        gen_ineq: ArrayLike | None = None,
         verbose: int = 0,
     ) -> None:
         if B_j is None:
@@ -191,6 +200,15 @@ class _SharedProjQCQP(ABC):
         assert len(self.c_2j) == len(self.B_j), (
             "Length of c_2j must match number of general constraints."
         )
+
+        self.gen_ineq: NDArray[np.bool_] = np.zeros(self.n_gen_constr, dtype=bool)
+        if gen_ineq is not None:
+            self.gen_ineq = np.asarray(gen_ineq, dtype=bool)
+            if self.gen_ineq.shape != (self.n_gen_constr,):
+                raise ValueError(
+                    "gen_ineq needs one entry per general constraint "
+                    f"({self.n_gen_constr}), got shape {self.gen_ineq.shape}."
+                )
 
         self.c0 = c0
         self.verbose = verbose
@@ -278,6 +296,18 @@ class _SharedProjQCQP(ABC):
     def get_number_constraints(self) -> int:
         """Return total number of constraints (projector + general)."""
         return self.n_proj_constr + self.n_gen_constr
+
+    def _nonneg_mask(self) -> NDArray[np.bool_] | None:
+        """Return which multipliers the dual keeps >= 0, in lags order.
+
+        Projector multipliers come first and are never bounded; the general ones
+        follow, bounded where gen_ineq is set. None if there are no inequalities, so
+        the optimizer stays on its unbounded path.
+        """
+        if not np.any(self.gen_ineq):
+            return None
+        proj = np.zeros(self.n_proj_constr, dtype=bool)
+        return cast(NDArray[np.bool_], np.concatenate([proj, self.gen_ineq]))
 
     def _add_projectors(self, lags: FloatNDArray) -> ComplexArray:
         """Form the diagonal of sum_j λ_j P_j (diagonal projectors only)."""
@@ -715,7 +745,7 @@ class _SharedProjQCQP(ABC):
         get_grad : bool, default False
             If True, compute gradient w.r.t. lags.
         get_hess : bool, default False
-            If True, compute Hessian (only supported when no general constraints).
+            If True, compute the Hessian (and the gradient).
         penalty_vectors : list[ComplexArray] | None
             Optional PSD-boundary penalty vectors.
 
@@ -901,7 +931,8 @@ class _SharedProjQCQP(ABC):
         opt_params : OptimizationHyperparameters | None
             Optimization hyperparameters (if None, default values are used).
         init_lags : ArrayLike | None
-            Initial feasible lags; if None, a feasible point is searched.
+            Initial feasible lags, >= 0 on the inequality multipliers (see
+            gen_ineq); if None, a feasible point is searched.
 
         Returns
         -------
@@ -955,16 +986,15 @@ class _SharedProjQCQP(ABC):
         feasibility_func = self.is_dual_feasible
         penalty_vector_func = self._get_PSD_penalty
 
+        args = (optfunc, feasibility_func, penalty_vector_func, is_convex, opt_params)
+        nonneg = self._nonneg_mask()
+
         optimizer: _Optimizer
         if method == "newton":
-            optimizer = Alt_Newton_GD(
-                optfunc, feasibility_func, penalty_vector_func, is_convex, opt_params
-            )
+            optimizer = Alt_Newton_GD(*args, nonneg=nonneg)
             optimizer.wall_step_func = self._wall_step
         elif method == "bfgs":
-            optimizer = BFGS(
-                optfunc, feasibility_func, penalty_vector_func, is_convex, opt_params
-            )
+            optimizer = BFGS(*args, nonneg=nonneg)
         else:
             raise ValueError(
                 f"Unknown method '{method}' for solving the dual problem. "
