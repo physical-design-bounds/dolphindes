@@ -223,6 +223,11 @@ class SparseSharedProjQCQP(_SharedProjQCQP):
         assert self.Acho is not None
         return cast(ComplexArray, self.Acho.solve_A(b))
 
+    def _logdet_factor(self) -> float:
+        """Return log det A for the current CHOLMOD factorization."""
+        assert self.Acho is not None
+        return float(np.real(self.Acho.logdet()))
+
     def _shift_invert_OPinv(
         self, A: sp.csc_array | ComplexArray
     ) -> spla.LinearOperator:
@@ -401,6 +406,11 @@ class DenseSharedProjQCQP(_SharedProjQCQP):
         return cast(
             ComplexArray, la.cho_solve(self.Acho, b, check_finite=False)
         )
+
+    def _logdet_factor(self) -> float:
+        """Return log det A for the current dense Cholesky factorization."""
+        assert self.Acho is not None
+        return float(2 * np.sum(np.log(np.real(np.diag(self.Acho[0])))))
 
     def is_dual_feasible(self, lags: FloatNDArray) -> bool:
         """

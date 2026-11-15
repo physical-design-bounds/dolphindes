@@ -1,3 +1,4 @@
+import warnings
 from abc import ABC, abstractmethod
 from collections import OrderedDict, namedtuple
 from typing import TYPE_CHECKING, Any, Iterator, Optional, Tuple, cast
@@ -575,6 +576,11 @@ class _SharedProjQCQP(ABC):
         pass
 
     @abstractmethod
+    def _logdet_factor(self) -> float:
+        """Return log det A for the current factorization ``self.Acho``."""
+        pass
+
+    @abstractmethod
     def is_dual_feasible(self, lags: FloatNDArray) -> bool:
         """
         Check positive semidefiniteness of A(lags).
@@ -934,6 +940,82 @@ class _SharedProjQCQP(ABC):
         else:
             return dualval, grad, hess, dual_aux
 
+    def _logdet_barrier(
+        self, lags: FloatNDArray, get_grad: bool = False, get_hess: bool = False
+    ) -> Tuple[float, Optional[FloatNDArray], Optional[FloatNDArray]]:
+        """Return -log det A(lags) and, if asked, its gradient and Hessian.
+
+        The gradient is -tr(A^-1 A_k) and the Hessian is tr(A^-1 A_k A^-1 A_l).
+
+        For a projector constraint, A_k = Sym(A1 P_k A2) with
+        P_k = sum_e p_ke E_(r_e, c_e) over the entries e of Pstruct. Both traces
+        then reduce to entries of
+            Guw = A2 A^-1 A1,   Gww = A2 A^-1 A2^†,   Guu = A1^† A^-1 A1:
+            tr(A^-1 A_k)          = Re sum_e p_ke Guw[c_e, r_e]
+            tr(A^-1 A_k A^-1 A_l) = Re sum_ef p_ke (p_lf T1[e, f]
+                                                   + conj(p_lf) T2[e, f]) / 2,
+            T1[e, f] = Guw[c_e, r_f] Guw[c_f, r_e],
+            T2[e, f] = Gww[c_e, c_f] Guu[r_f, r_e].
+        A general constraint with a quadratic part uses C_j = A^-1 A_j A^-1, since
+        tr(A^-1 A_k A^-1 A_j) = tr(A_k C_j).
+
+        A^-1 and T1, T2 are dense, so this is for n and nnz(Pstruct) up to a few
+        thousand.
+        """
+        # Value, from the Cholesky factor of A(lags)
+        self._get_factorization(lags)
+        value = -self._logdet_factor()
+        if not (get_grad or get_hess):
+            return value, None, None
+
+        # Setup. Multipliers [0, P) belong to projector constraints, [P, K) to
+        # general constraints, whose sparse A_j are kept in `gen`.
+        P, K = self.n_proj_constr, self.get_number_constraints()
+        Ainv = self._Acho_solve(np.eye(self.A0.shape[0], dtype=complex))
+        A1, A2 = self.A1, self.A2
+        # Pdata[e, k] = p_ke, the value of P_k at the entry (r[e], c[e]) of Pstruct
+        r, c = self.Proj.Pstruct.nonzero()
+        Pdata = sp.csr_array(self.Proj.get_Pdata_column_stack())
+        gen = [sp.coo_array(Aj) for Aj in self.precomputed_As[P:]]
+
+        def re_tr(M: ComplexArray, Ak: sp.coo_array) -> float:
+            """Re tr(M A_k) = Re sum_ab M[b, a] A_k[a, b] for a sparse A_k."""
+            return float(np.real(Ak.data @ M[Ak.col, Ak.row]))
+
+        # Gradient, -tr(A^-1 A_k)
+        Guw = A2 @ Ainv @ A1
+        grad = np.zeros(K)
+        grad[:P] = -np.real(Pdata.T @ Guw[c, r])
+        grad[P:] = [-re_tr(Ainv, Aj) for Aj in gen]
+        if not get_hess:
+            return value, grad, None
+
+        # Hessian, tr(A^-1 A_k A^-1 A_l)
+        hess = np.zeros((K, K))
+
+        # Projector-projector block: T1 and T2 have one row and one column per
+        # entry of Pstruct, so they are built a block of rows at a time.
+        Gww = A2 @ Ainv @ A2.conj().T
+        Guu = A1.conj().T @ Ainv @ A1
+        block = max(1, 2**22 // len(r))  # rows per block, ~4M entries of T1, T2
+        for s in range(0, len(r), block):
+            b = slice(s, s + block)
+            T1 = Guw[c[b, None], r[None, :]] * Guw[c[None, :], r[b, None]]
+            T2 = Gww[c[b, None], c[None, :]] * Guu[r[None, :], r[b, None]]
+            Tp = T1 @ Pdata + T2 @ Pdata.conj()
+            hess[:P, :P] += 0.5 * np.real(Pdata[b].T @ Tp)
+
+        # Rows and columns of general constraints j: tr(A_k C_j), C_j = A^-1 A_j A^-1
+        for j, Aj in enumerate(gen):
+            if Aj.nnz == 0:  # A does not depend on this multiplier
+                continue
+            C = Ainv @ (Aj @ Ainv)
+            # with projector constraints k: as the gradient, with C_j in place of A^-1
+            hess[:P, P + j] = hess[P + j, :P] = np.real(Pdata.T @ (A2 @ C @ A1)[c, r])
+            # with general constraints l: directly from the sparse A_l
+            hess[P:, P + j] = [re_tr(C, Al) for Al in gen]
+        return value, grad, hess
+
     def solve_current_dual_problem(
         self,
         method: str,
@@ -987,6 +1069,17 @@ class _SharedProjQCQP(ABC):
         best_dual = np.inf
         best_lags = init_lags.copy()
 
+        if opt_params.psd_barrier not in ("penalty", "logdet"):
+            raise ValueError(f"Unknown psd_barrier '{opt_params.psd_barrier}'.")
+        use_barrier = opt_params.psd_barrier == "logdet"
+        if use_barrier:
+            warnings.warn(
+                'psd_barrier="logdet" is experimental.', UserWarning, stacklevel=2
+            )
+            # mu = barrier_scale * penalty_ratio, so that mu n, the gap the barrier
+            # leaves, starts at penalty_ratio * |D(init_lags)|
+            barrier_scale = abs(self.get_dual(init_lags)[0]) / self.A0.shape[0]
+
         def optfunc(
             lags: FloatNDArray,
             get_grad: bool = False,
@@ -1000,10 +1093,20 @@ class _SharedProjQCQP(ABC):
             if out[3].dualval_real < best_dual:
                 best_dual = out[3].dualval_real
                 best_lags = np.array(lags, dtype=float)
-            return out
+            if not use_barrier:
+                return out
+            # The optimizer reduces penalty_ratio once per outer iteration.
+            mu = barrier_scale * optimizer.penalty_ratio
+            val, grad, hess = self._logdet_barrier(lags, get_grad or get_hess, get_hess)
+            return (
+                out[0] + mu * val,
+                None if out[1] is None else out[1] + mu * grad,
+                None if out[2] is None else out[2] + mu * hess,
+                out[3],
+            )
 
         feasibility_func = self.is_dual_feasible
-        penalty_vector_func = self._get_PSD_penalty
+        penalty_vector_func = None if use_barrier else self._get_PSD_penalty
 
         args = (optfunc, feasibility_func, penalty_vector_func, is_convex, opt_params)
         nonneg = self._nonneg_mask()

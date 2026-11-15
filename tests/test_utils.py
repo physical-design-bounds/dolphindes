@@ -33,3 +33,18 @@ def test_Projectors():
     assert not Proj.validate_projector(test2), (
         "validate_projector conflated explicit zeros and sparsity structure."
     )
+
+
+def test_Pdata_column_stack_sparser_than_Pstruct():
+    """Non-diagonal projectors that each cover only part of Pstruct round-trip."""
+    struct = sp.csr_array([[1, 1, 0], [0, 1, 1], [1, 0, 1]])
+    P1 = sp.csr_array([[2.0, 0, 0], [0, 0, 3.0], [0, 0, 0]], dtype=complex)
+    P2 = sp.csr_array([[0, 1j, 0], [0, 5.0, 0], [4.0, 0, 0]], dtype=complex)
+    Proj = Projectors([P1, P2], struct)
+    rows, cols = Proj.Pstruct.nonzero()
+    Pdata = Proj.get_Pdata_column_stack()
+    assert Pdata.shape == (struct.size, 2)
+    for j, P in enumerate((P1, P2)):
+        np.testing.assert_allclose(Pdata[:, j], P.toarray()[rows, cols])
+    Proj.set_Pdata_column_stack(Pdata)
+    np.testing.assert_allclose(Proj.get_Pdata_column_stack(), Pdata)
