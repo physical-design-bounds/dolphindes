@@ -28,8 +28,9 @@ class OptimizationHyperparameters:
         Maximum number of outer iterations that reduce penalties. Default: np.inf.
     penalty_ratio : float
         Initial boundary penalty values, as a factor of dualvalue. With
-        psd_barrier="logdet", the gap mu * n left by the barrier at the start, as a
-        factor of the starting dual value. Default: 1e-2.
+        psd_barrier="logdet", the gap mu (n + number of inequality multipliers) left
+        by the barrier at the start, as a factor of the starting dual value.
+        Default: 1e-2.
     penalty_reduction : float
         Factor by which penalty ratio is reduced per outer iteration. Default: 0.1.
     break_iter_period : int
@@ -41,12 +42,15 @@ class OptimizationHyperparameters:
         and gradient steps, both normalized with lengths learned from step to step,
         instead of taking every Newton step at its own length.
     psd_barrier : str
-        How the dual is kept away from the boundary of A(lags) >= 0. "penalty" adds
-        a penalty vector (fake source) at each wall the line search hits. "logdet"
-        adds -mu log det A(lags) instead, which pushes back in every direction at
-        once; it is for duals whose optimum has many directions at the wall, such
-        as problems with binary structure variables (experimental). Default:
-        "penalty".
+        How the dual is kept inside A(lags) >= 0 and, for inequality constraints,
+        lags_i >= 0. Two modes, which are not mixed:
+            "penalty": a penalty vector (fake source) at each PSD wall the line
+                search hits, and an active set for lags_i >= 0. Default.
+            "logdet" (experimental): -mu log det A(lags) - mu sum_i log lags_i,
+                which pushes back in every direction at once. For duals whose
+                optimum has many directions at the wall, such as problems with
+                binary structure variables, where the active set would also be
+                slow (it activates at most one bound per step).
     """
 
     opttol: float = 1e-2

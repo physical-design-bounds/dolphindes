@@ -943,9 +943,14 @@ class _SharedProjQCQP(ABC):
     def _logdet_barrier(
         self, lags: FloatNDArray, get_grad: bool = False, get_hess: bool = False
     ) -> Tuple[float, Optional[FloatNDArray], Optional[FloatNDArray]]:
-        """Return -log det A(lags) and, if asked, its gradient and Hessian.
+        """Return -log det A(lags) - sum_i log lags_i and, if asked, its derivatives.
 
-        The gradient is -tr(A^-1 A_k) and the Hessian is tr(A^-1 A_k A^-1 A_l).
+        The sum runs over the inequality multipliers (gen_ineq), so this is
+        -log det diag(A, lags_ineq), the barrier for A >= 0 and lags_ineq >= 0 together.
+        Its gradient and Hessian are -1/lags_i and 1/lags_i^2 (diagonal).
+
+        For -log det A, the gradient is -tr(A^-1 A_k) and the Hessian is
+        tr(A^-1 A_k A^-1 A_l).
 
         For a projector constraint, A_k = Sym(A1 P_k A2) with
         P_k = sum_e p_ke E_(r_e, c_e) over the entries e of Pstruct. Both traces
@@ -962,15 +967,19 @@ class _SharedProjQCQP(ABC):
         A^-1 and T1, T2 are dense, so this is for n and nnz(Pstruct) up to a few
         thousand.
         """
+        # Multipliers [0, P) belong to projector constraints, [P, K) to general
+        # constraints; ineq are the general ones that are inequalities.
+        P, K = self.n_proj_constr, self.get_number_constraints()
+        ineq = P + np.flatnonzero(self.gen_ineq)
+        lam = lags[ineq]
+
         # Value, from the Cholesky factor of A(lags)
         self._get_factorization(lags)
-        value = -self._logdet_factor()
+        value = -self._logdet_factor() - float(np.sum(np.log(lam)))
         if not (get_grad or get_hess):
             return value, None, None
 
-        # Setup. Multipliers [0, P) belong to projector constraints, [P, K) to
-        # general constraints, whose sparse A_j are kept in `gen`.
-        P, K = self.n_proj_constr, self.get_number_constraints()
+        # Setup. The sparse A_j of the general constraints are kept in `gen`.
         Ainv = self._Acho_solve(np.eye(self.A0.shape[0], dtype=complex))
         A1, A2 = self.A1, self.A2
         # Pdata[e, k] = p_ke, the value of P_k at the entry (r[e], c[e]) of Pstruct
@@ -987,6 +996,7 @@ class _SharedProjQCQP(ABC):
         grad = np.zeros(K)
         grad[:P] = -np.real(Pdata.T @ Guw[c, r])
         grad[P:] = [-re_tr(Ainv, Aj) for Aj in gen]
+        grad[ineq] -= 1 / lam
         if not get_hess:
             return value, grad, None
 
@@ -1014,6 +1024,7 @@ class _SharedProjQCQP(ABC):
             hess[:P, P + j] = hess[P + j, :P] = np.real(Pdata.T @ (A2 @ C @ A1)[c, r])
             # with general constraints l: directly from the sparse A_l
             hess[P:, P + j] = [re_tr(C, Al) for Al in gen]
+        hess[ineq, ineq] += 1 / lam**2
         return value, grad, hess
 
     def solve_current_dual_problem(
@@ -1072,13 +1083,22 @@ class _SharedProjQCQP(ABC):
         if opt_params.psd_barrier not in ("penalty", "logdet"):
             raise ValueError(f"Unknown psd_barrier '{opt_params.psd_barrier}'.")
         use_barrier = opt_params.psd_barrier == "logdet"
+        nonneg = self._nonneg_mask()
         if use_barrier:
             warnings.warn(
                 'psd_barrier="logdet" is experimental.', UserWarning, stacklevel=2
             )
-            # mu = barrier_scale * penalty_ratio, so that mu n, the gap the barrier
-            # leaves, starts at penalty_ratio * |D(init_lags)|
-            barrier_scale = abs(self.get_dual(init_lags)[0]) / self.A0.shape[0]
+            # mu = barrier_scale * penalty_ratio, so that the gap the barrier leaves,
+            # mu (n + number of inequality multipliers), starts at
+            # penalty_ratio * |D(init_lags)|
+            degree = self.A0.shape[0] + np.count_nonzero(self.gen_ineq)
+            barrier_scale = abs(self.get_dual(init_lags)[0]) / degree
+            if nonneg is not None:
+                # The barrier needs the inequality multipliers > 0: start them at mu
+                # or more (on the central path, lags_i times the slack of
+                # constraint i is mu).
+                mu = barrier_scale * opt_params.penalty_ratio
+                init_lags[nonneg] = np.maximum(init_lags[nonneg], mu)
 
         def optfunc(
             lags: FloatNDArray,
@@ -1105,18 +1125,24 @@ class _SharedProjQCQP(ABC):
                 out[3],
             )
 
-        feasibility_func = self.is_dual_feasible
+        def feasibility_func(lags: FloatNDArray) -> bool:
+            # With the barrier, lags > 0 on the inequality multipliers is part of
+            # feasibility; otherwise the optimizer keeps them >= 0 (active set).
+            if use_barrier and nonneg is not None and np.any(lags[nonneg] <= 0.0):
+                return False
+            return self.is_dual_feasible(lags)
+
         penalty_vector_func = None if use_barrier else self._get_PSD_penalty
 
         args = (optfunc, feasibility_func, penalty_vector_func, is_convex, opt_params)
-        nonneg = self._nonneg_mask()
+        bounds = None if use_barrier else nonneg
 
         optimizer: _Optimizer
         if method == "newton":
-            optimizer = Alt_Newton_GD(*args, nonneg=nonneg)
+            optimizer = Alt_Newton_GD(*args, nonneg=bounds)
             optimizer.wall_step_func = self._wall_step
         elif method == "bfgs":
-            optimizer = BFGS(*args, nonneg=nonneg)
+            optimizer = BFGS(*args, nonneg=bounds)
         else:
             raise ValueError(
                 f"Unknown method '{method}' for solving the dual problem. "

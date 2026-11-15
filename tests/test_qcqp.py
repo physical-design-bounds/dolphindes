@@ -1475,6 +1475,26 @@ def test_general_inequality_complementary_slackness_off_the_wall(solver):
     assert np.isclose(primal, dual, rtol=1e-6)
 
 
+
+@pytest.mark.parametrize("a0_shift", [0.05, 30.0], ids=["on-wall", "off-wall"])
+def test_logdet_barrier_with_general_inequalities(a0_shift):
+    """psd_barrier="logdet" keeps the inequality multipliers > 0 with its own barrier
+    and reaches the dual of the active set, with the PSD wall binding or not."""
+    k, m = 8, 4
+    qcqp = _wall_qcqp(gen_ineq=[True] * m, a0_shift=a0_shift)
+    x0 = np.concatenate([np.full(k, 1e-6), np.zeros(m)])
+    dual, _ = _solve_tight(qcqp, ("newton", 100), x0)
+
+    params = OptimizationHyperparameters(
+        opttol=1e-8, break_iter_period=20, psd_barrier="logdet"
+    )
+    with pytest.warns(UserWarning, match="experimental"):
+        dual_logdet, lags, _, _, _ = qcqp.solve_current_dual_problem(
+            "newton", opt_params=params, init_lags=x0
+        )
+    assert np.all(lags[k:] > 0.0)
+    assert np.isclose(dual_logdet, dual, rtol=1e-6)
+
 def test_run_gcd_keeps_general_inequality(sparse_qcqp_data):
     """GCD only changes projector constraints, so a power bound |A2 x|^2 <= P marked
     as an inequality keeps its place and its sign through GCD: its multiplier ends
