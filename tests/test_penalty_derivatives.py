@@ -166,7 +166,9 @@ def test_penalized_derivatives_match_finite_differences(qcqp):
 
 
 def test_logdet_barrier_derivatives_match_finite_differences(qcqp):
-    """The log-det barrier's gradient and Hessian match differences of its value."""
+    """The log-det barrier's gradient and Hessian match differences of its value, with
+    the general constraint as an inequality, so that its -log lags_i term is in."""
+    qcqp.gen_ineq[:] = True
     k = qcqp.get_number_constraints()
     lags = np.full(k, 0.01)
     assert qcqp.is_dual_feasible(lags)
