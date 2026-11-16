@@ -400,6 +400,11 @@ class _Optimizer:
         opt_val = np.inf
         grad_direction = dir @ grad
         while True:
+            # Points short of a feasible one are feasible in exact arithmetic, but next
+            # to the PSD wall roundoff can make them infeasible: stop backtracking
+            # there.
+            if not self.feasible_func(x0 + alpha * dir):
+                break
             tmp_value, _, _, _ = self.optfunc(
                 x0 + alpha * dir,
                 get_grad=False,

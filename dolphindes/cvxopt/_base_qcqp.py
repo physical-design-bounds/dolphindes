@@ -363,7 +363,8 @@ class _SharedProjQCQP(ABC):
                 lags[i] * self.precomputed_As[i] for i in range(len(lags))
             )
         indptr, indices, shape, a0, D = self._assembly_map
-        data = a0 + D[:, : len(lags)] @ lags
+        # slicing a sparse D copies it, so only slice when lags is short
+        data = a0 + (D if len(lags) == D.shape[1] else D[:, : len(lags)]) @ lags
         return sp.csc_array((data, indices, indptr), shape=shape)
 
     def _build_assembly_map(
@@ -1032,11 +1033,12 @@ class _SharedProjQCQP(ABC):
         Gww = A2 @ Ainv @ A2.conj().T
         Guu = A1.conj().T @ Ainv @ A1
         block = max(1, 2**22 // len(r))  # rows per block, ~4M entries of T1, T2
+        Pdata_conj = Pdata.conj()
         for s in range(0, len(r), block):
             b = slice(s, s + block)
             T1 = Guw[c[b, None], r[None, :]] * Guw[c[None, :], r[b, None]]
             T2 = Gww[c[b, None], c[None, :]] * Guu[r[None, :], r[b, None]]
-            Tp = T1 @ Pdata + T2 @ Pdata.conj()
+            Tp = T1 @ Pdata + T2 @ Pdata_conj
             hess[:P, :P] += 0.5 * np.real(Pdata[b].T @ Tp)
 
         # Rows and columns of general constraints j: tr(A_k C_j), C_j = A^-1 A_j A^-1
@@ -1075,7 +1077,9 @@ class _SharedProjQCQP(ABC):
         current_dual : float
             Smallest dual value found, without the PSD-boundary penalties.
         current_lags : FloatNDArray
-            Lagrange multipliers at which current_dual was found.
+            Lagrange multipliers at which current_dual was found. With
+            psd_barrier="logdet" usually next to the PSD wall, a poor warm start:
+            the optimizer's last iterate, ``_stop_lags``, is on the central path.
         current_grad : FloatNDArray
             Gradient of the dual at current_lags, without penalties.
         current_hess : FloatNDArray | None
@@ -1120,9 +1124,16 @@ class _SharedProjQCQP(ABC):
             if nonneg is not None:
                 # The barrier needs the inequality multipliers > 0: start them at mu
                 # or more (on the central path, lags_i times the slack of
-                # constraint i is mu).
-                mu = barrier_scale * opt_params.penalty_ratio
-                init_lags[nonneg] = np.maximum(init_lags[nonneg], mu)
+                # constraint i is mu), or less if that leaves A(lags) indefinite.
+                lift = barrier_scale * opt_params.penalty_ratio
+                start = init_lags.copy()
+                start[nonneg] = np.maximum(init_lags[nonneg], lift)
+                while not self.is_dual_feasible(start):
+                    lift *= 0.1
+                    if lift < 1e-12 * barrier_scale:
+                        raise ValueError("init_lags is not dual feasible.")
+                    start[nonneg] = np.maximum(init_lags[nonneg], lift)
+                init_lags = start
 
         def optfunc(
             lags: FloatNDArray,
@@ -1175,7 +1186,8 @@ class _SharedProjQCQP(ABC):
 
         self._stop_lags = optimizer.run(init_lags)[0].copy()
         # Report everything at the multipliers of the smallest dual (cached
-        # calculation), so later solves can warm-start from them.
+        # calculation). With the barrier these are usually a line-search point next
+        # to the PSD wall: continue from self._stop_lags instead, as run_gcd does.
         best_lags = self._clip_to_bounds(best_lags)
         dual, grad, hess, _ = self.get_dual(
             best_lags, get_grad=True, get_hess=method == "newton"

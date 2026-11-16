@@ -899,14 +899,14 @@ def test_solve_dual_reports_smallest_dual_without_penalties(
     assert np.allclose(qcqp.current_xstar, qcqp._get_xstar(qcqp.current_lags)[0])
 
 
-def _penalty_and_logdet_duals(qcqp):
+def _penalty_and_logdet_duals(qcqp, method):
     """Return the duals solved with psd_barrier="penalty" and "logdet"."""
     init_lags = qcqp.find_feasible_lags()
 
     def solve(barrier):
         params = OptimizationHyperparameters(opttol=1e-4, psd_barrier=barrier)
         return qcqp.solve_current_dual_problem(
-            "newton", opt_params=params, init_lags=init_lags
+            method, opt_params=params, init_lags=init_lags
         )[0]
 
     penalty = solve("penalty")
@@ -915,15 +915,17 @@ def _penalty_and_logdet_duals(qcqp):
     return penalty, logdet
 
 
-def test_logdet_barrier_reaches_the_penalty_dual_sparse(sparse_qcqp_data):
+@pytest.mark.parametrize("method", ["newton", "bfgs"])
+def test_logdet_barrier_reaches_the_penalty_dual_sparse(sparse_qcqp_data, method):
     """psd_barrier="logdet" converges to the same dual as the default penalty."""
-    penalty, logdet = _penalty_and_logdet_duals(sparse_qcqp_data["qcqp"])
+    penalty, logdet = _penalty_and_logdet_duals(sparse_qcqp_data["qcqp"], method)
     assert np.isclose(logdet, penalty, rtol=1e-4)
 
 
-def test_logdet_barrier_reaches_the_penalty_dual_dense(dense_qcqp_data):
+@pytest.mark.parametrize("method", ["newton", "bfgs"])
+def test_logdet_barrier_reaches_the_penalty_dual_dense(dense_qcqp_data, method):
     """psd_barrier="logdet" converges to the same dual as the default penalty."""
-    penalty, logdet = _penalty_and_logdet_duals(dense_qcqp_data["qcqp"])
+    penalty, logdet = _penalty_and_logdet_duals(dense_qcqp_data["qcqp"], method)
     assert np.isclose(logdet, penalty, rtol=1e-4)
 
 
@@ -1548,6 +1550,26 @@ def test_logdet_barrier_with_general_inequalities(a0_shift):
             "newton", opt_params=params, init_lags=x0
         )
     assert np.all(lags[k:] > 0.0)
+    assert np.isclose(dual_logdet, dual, rtol=1e-6)
+
+
+def test_logdet_barrier_from_a_start_on_the_wall():
+    """A warm start on the PSD wall with inequality multipliers at 0, here the active
+    set's optimum: raising those to mu would leave A(lags) indefinite (the B_j are
+    indefinite), so the barrier raises them less, and reaches the same dual."""
+    k, m = 8, 4
+    qcqp = _wall_qcqp(gen_ineq=[True] * m)
+    x0 = np.concatenate([np.full(k, 1e-6), np.zeros(m)])
+    dual, lags = _solve_tight(qcqp, ("newton", 100), x0)
+    assert np.any(lags[k:] == 0.0)
+
+    params = OptimizationHyperparameters(
+        opttol=1e-8, break_iter_period=20, psd_barrier="logdet"
+    )
+    with pytest.warns(UserWarning, match="experimental"):
+        dual_logdet = qcqp.solve_current_dual_problem(
+            "newton", opt_params=params, init_lags=lags
+        )[0]
     assert np.isclose(dual_logdet, dual, rtol=1e-6)
 
 def test_run_gcd_keeps_general_inequality(sparse_qcqp_data):
