@@ -152,6 +152,25 @@ def test_bfgs_update_keeps_small_scale_curvature() -> None:
     assert np.allclose(new_Hinv @ gamma, delta, rtol=1e-8, atol=0)
 
 
+def test_bfgs_update_matches_the_textbook_formula() -> None:
+    """The O(n^2) rank-2 update equals (I - rho s y^T) H (I - rho y s^T) + rho s s^T
+    for a symmetric H, and stays exactly symmetric."""
+    rng = np.random.default_rng(2)
+    n = 8
+    Hinv = _generate_psd_matrix(n, cond_number=100)
+    Hinv = (Hinv + Hinv.T) / 2
+    delta = rng.standard_normal(n)
+    gamma = _generate_psd_matrix(n, cond_number=10) @ delta  # gamma @ delta > 0
+
+    new_Hinv = _bfgs_for_update()._update_Hinv(Hinv, gamma, np.zeros(n), delta)
+
+    rho = 1 / (gamma @ delta)
+    left = np.eye(n) - rho * np.outer(delta, gamma)
+    textbook = left @ Hinv @ left.T + rho * np.outer(delta, delta)
+    assert np.allclose(new_Hinv, textbook, rtol=1e-12, atol=1e-12)
+    assert np.array_equal(new_Hinv, new_Hinv.T)
+
+
 @pytest.mark.parametrize(
     "gamma, delta",
     [

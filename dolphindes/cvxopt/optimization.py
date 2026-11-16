@@ -599,16 +599,19 @@ class BFGS(_Optimizer):
                 print("Skipping Hinv update due to small gamma_dot_delta")
             return Hinv
 
-        # Standard BFGS update formula
+        # BFGS update: H_new = (I - rho*delta*gamma^T) @ H @ (I - rho*gamma*delta^T) + rho*delta*delta^T
+        # The code below algebraically expands this original formula to avoid O(n^3) matrix products.
+        # By distributing the terms and exploiting the symmetry of the inverse Hessian (H = H^T), 
+        # the equation is rewritten using only vector-vector and outer products.
+        # We precompute the matrix-vector product Hg = Hinv @ gamma once, which reduces the
+        # total computational complexity of the update step from O(n^3) down to O(n^2).
         rho = 1.0 / gamma_dot_delta
-        identity_mat = np.eye(Hinv.shape[0])
-        term1 = identity_mat - rho * np.outer(delta, gamma)
-        term2 = identity_mat - rho * np.outer(gamma, delta)
-        term3 = rho * np.outer(delta, delta)
-
-        new_Hinv = term1 @ Hinv @ term2 + term3
-
-        return new_Hinv
+        Hg = Hinv @ gamma
+        return (
+            Hinv
+            - rho * (np.outer(delta, Hg) + np.outer(Hg, delta))
+            + (rho**2 * (gamma @ Hg) + rho) * np.outer(delta, delta)
+        )
 
     def _add_penalty(
         self,
