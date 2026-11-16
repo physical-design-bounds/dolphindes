@@ -1181,25 +1181,42 @@ def test_is_dual_feasible_refuses_small_indefinite():
     assert not qcqp.is_dual_feasible(t * d)
 
 
+def _set_D_storage(qcqp, storage):
+    """Force a sparse D (no density counts as filled enough for dense); the
+    fixtures' small, filled D is dense by default."""
+    if storage == "sparse":
+        qcqp._assembly_map_dense_min_density = 2.0
+    qcqp._invalidate_factor_cache()
+
+
+def _assert_D_storage(qcqp, storage):
+    assert qcqp._assembly_map is not None, "expected a fixed-pattern map here"
+    assert sp.issparse(qcqp._assembly_map[4]) == (storage == "sparse")
+
+
+@pytest.mark.parametrize("storage", ["dense", "sparse"])
 @pytest.mark.parametrize("diagonal", [True, False])
 @pytest.mark.parametrize("n_gen", [0, 2])
-def test_assembly_map_matches_elementwise_sum(diagonal, n_gen):
-    """A(lags) assembled on the fixed pattern equals the elementwise sum, at more than
-    one lags (the second reuses the cached map)."""
+def test_assembly_map_matches_elementwise_sum(diagonal, n_gen, storage):
+    """A(lags) assembled on the fixed pattern, with D dense or sparse, equals the
+    elementwise sum, at more than one lags (the second reuses the cached map)."""
     qcqp = _sparse_qcqp_for_assembly(diagonal, n_gen)
+    _set_D_storage(qcqp, storage)
     n_constr = qcqp.get_number_constraints()
     rng = np.random.default_rng(2)
     _assert_total_A_matches_elementwise(qcqp, rng.standard_normal(n_constr))
-    assert qcqp._assembly_map is not None, "expected a fixed-pattern map here"
+    _assert_D_storage(qcqp, storage)
     _assert_total_A_matches_elementwise(qcqp, rng.standard_normal(n_constr))
 
 
+@pytest.mark.parametrize("storage", ["dense", "sparse"])
 @pytest.mark.parametrize("diagonal", [True, False])
 @pytest.mark.parametrize("n_gen", [0, 2])
-def test_assembly_map_matches_elementwise_derivatives(diagonal, n_gen):
-    """The two assembly paths agree on what callers actually consume: the dual value,
+def test_assembly_map_matches_elementwise_derivatives(diagonal, n_gen, storage):
+    """The assembly paths agree on what callers actually consume: the dual value,
     its gradient and its Hessian, penalty terms included."""
     qcqp = _sparse_qcqp_for_assembly(diagonal, n_gen)
+    _set_D_storage(qcqp, storage)
     rng = np.random.default_rng(3)
     n = qcqp.A0.shape[0]
     # A0 = 3I dominates at this scale, so a small point is interior
@@ -1209,7 +1226,7 @@ def test_assembly_map_matches_elementwise_derivatives(diagonal, n_gen):
     kwargs = dict(get_grad=True, get_hess=True, penalty_vectors=[1e-3 * v])
 
     dual_map, grad_map, hess_map, aux_map = qcqp.get_dual(lags, **kwargs)
-    assert qcqp._assembly_map is not None, "expected a fixed-pattern map here"
+    _assert_D_storage(qcqp, storage)
 
     qcqp._assembly_map_max_bytes = 1  # force the elementwise sum
     qcqp._invalidate_factor_cache()
@@ -1223,16 +1240,18 @@ def test_assembly_map_matches_elementwise_derivatives(diagonal, n_gen):
     assert np.allclose(aux_map.hess_penalty, aux_el.hess_penalty, rtol=1e-9, atol=1e-11)
 
 
-def test_assembly_map_preserves_real_dtype():
+@pytest.mark.parametrize("storage", ["dense", "sparse"])
+def test_assembly_map_preserves_real_dtype(storage):
     """A real-valued problem must stay real: promoting A(lags) to complex would double
     CHOLMOD's memory and factorization cost."""
     qcqp = _real_sparse_qcqp_for_assembly()
     lags = np.abs(qcqp.find_feasible_lags())
     assert qcqp.A0.dtype == np.float64  # else the fixture is not exercising this
     assert all(Ak.dtype == np.float64 for Ak in qcqp.precomputed_As)
+    _set_D_storage(qcqp, storage)
 
     got = qcqp._get_total_A(lags)
-    assert qcqp._assembly_map is not None, "expected a fixed-pattern map here"
+    _assert_D_storage(qcqp, storage)
     want = _elementwise_total_A(qcqp, lags)
     assert got.dtype == want.dtype == np.float64
     _assert_total_A_matches_elementwise(qcqp, lags)
@@ -1271,6 +1290,42 @@ def test_assembly_map_falls_back_when_too_large(sparse_qcqp_data):
     qcqp._invalidate_factor_cache()
     _assert_total_A_matches_elementwise(qcqp, lags)
     assert qcqp._assembly_map is None
+
+
+def _local_qcqp(n=50):
+    """One constraint per pixel, each touching one entry of A: D is n x n with n
+    nonzeros, 1/n full (16 n^2 bytes dense, 24 n sparse)."""
+    eye = sp.csc_array(sp.eye_array(n, format="csc"))
+    Projlist = [sp.csc_array(([1.0 + 0j], ([j], [j])), shape=(n, n)) for j in range(n)]
+    s = np.ones(n, dtype=complex)
+    return SparseSharedProjQCQP(
+        3.0 * eye, s, 0.0, eye, eye, s, Projlist, eye, verbose=0
+    )
+
+
+def test_assembly_map_sparse_for_local_constraints():
+    """A D 2% full is below the dense threshold, so it is kept sparse."""
+    qcqp = _local_qcqp()
+    lags = np.random.default_rng(0).standard_normal(qcqp.get_number_constraints())
+    _assert_total_A_matches_elementwise(qcqp, lags)
+    _assert_D_storage(qcqp, "sparse")
+
+
+@pytest.mark.parametrize(
+    "max_bytes, storage", [(10**6, "dense"), (10**4, "sparse"), (10**3, None)]
+)
+def test_assembly_map_storage_within_budget(max_bytes, storage):
+    """With the density test off, D is dense if that fits the budget (40 kB here)."""
+    qcqp = _local_qcqp()
+    qcqp._assembly_map_dense_min_density = 0.0
+    qcqp._assembly_map_max_bytes = max_bytes
+    qcqp._invalidate_factor_cache()
+    lags = np.random.default_rng(0).standard_normal(qcqp.get_number_constraints())
+    _assert_total_A_matches_elementwise(qcqp, lags)
+    if storage is None:
+        assert qcqp._assembly_map is None
+    else:
+        _assert_D_storage(qcqp, storage)
 
 
 def test_assembly_map_declined_for_dense(dense_qcqp_data):

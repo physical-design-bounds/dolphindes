@@ -240,12 +240,14 @@ class _SharedProjQCQP(ABC):
 
         # Fixed-pattern representation of A(lags), built lazily by _build_assembly_map.
         # None means sum the A_k elementwise, _built distinguishes that from not
-        # having built it yet
+        # having built it yet. Its D is stored dense when at least _dense_min_density
+        # of it is nonzero and that fits in _max_bytes, else sparse if that fits.
         self._assembly_map: Optional[
-            Tuple[Any, Any, Tuple[int, int], ComplexArray, ComplexArray]
+            Tuple[Any, Any, Tuple[int, int], ComplexArray, ComplexArray | sp.csc_array]
         ] = None
         self._assembly_map_built = False
         self._assembly_map_max_bytes = 512 * 1024**2
+        self._assembly_map_dense_min_density = 0.03
 
         if self.use_precomp:
             self.compute_precomputed_values()
@@ -366,21 +368,30 @@ class _SharedProjQCQP(ABC):
 
     def _build_assembly_map(
         self,
-    ) -> Optional[Tuple[Any, Any, Tuple[int, int], ComplexArray, ComplexArray]]:
+    ) -> Optional[
+        Tuple[Any, Any, Tuple[int, int], ComplexArray, ComplexArray | sp.csc_array]
+    ]:
         """Return a fixed-pattern representation of A(lags), or None if unavailable.
 
         Every A_k is supported inside one lags-independent pattern so A(lags) needs no
         index merging at all. Holding each A_k's entries in their slots in that pattern
-        as the columns of a dense ``(nnz, n_constr)`` block D,
+        as the columns of an ``(nnz, n_constr)`` matrix D,
 
             A(lags).data = a0 + D @ lags
 
-        which is one operation over contiguous memory in place of ``n_constr`` sparse
-        additions that each merge two index structures and allocate.
+        which is one product in place of ``n_constr`` sparse additions that each merge
+        two index structures and allocate.
+
+        Column k of D has nnz(A_k) nonzeros. Many local constraints (pixels, brush
+        stamps) leave D almost empty, so it is kept sparse. A few constraints spread
+        over the whole pattern (e.g. after GCD) fill it, and it is stored dense when
+        at least ``_assembly_map_dense_min_density`` of it is nonzero and the dense
+        array fits in ``_assembly_map_max_bytes``: a dense product that stays in cache
+        beats the sparse one down to a density of a few percent.
 
         Returns None (leaving the elementwise sum in use) when the formulation is
         dense, where the A_k are full n^2 matrices with no pattern to share, or when
-        D would exceed ``_assembly_map_max_bytes``.
+        D would exceed ``_assembly_map_max_bytes`` sparse too.
 
         Returns
         -------
@@ -412,25 +423,38 @@ class _SharedProjQCQP(ABC):
         union = sp.csc_array(union)
         union.sort_indices()
 
-        nnz = union.nnz
-        if nnz * len(mats[1:]) * dtype.itemsize > self._assembly_map_max_bytes:
+        nnz, K = union.nnz, len(mats) - 1
+        nnz_D = sum(m.nnz for m in mats[1:])
+        dense = (
+            nnz_D >= self._assembly_map_dense_min_density * nnz * K
+            and nnz * K * dtype.itemsize <= self._assembly_map_max_bytes
+        )
+        # sparse: a value and an int64 row index per entry
+        if not dense and nnz_D * (dtype.itemsize + 8) > self._assembly_map_max_bytes:
             return None
 
         slot_carrier = union.copy()
         slot_carrier.data = np.arange(1, nnz + 1, dtype=float)
 
-        a0 = np.zeros(nnz, dtype=dtype)
-        D = np.zeros((nnz, len(self.precomputed_As)), dtype=dtype)
-        for j, m in enumerate(mats):
-            slots = sp.csc_array(slot_carrier.multiply(pattern(m)))
-            slots.sort_indices()
-            pos = slots.data.astype(np.int64) - 1
-            if j == 0:
-                a0[pos] = m.data
-            else:
-                D[pos, j - 1] = m.data
+        def slots(m: sp.csc_array) -> NDArray[np.int64]:
+            """Positions of m's entries (in m.data order) in the union pattern."""
+            s = sp.csc_array(slot_carrier.multiply(pattern(m)))
+            s.sort_indices()
+            return cast(NDArray[np.int64], s.data.astype(np.int64) - 1)
 
-        return union.indptr, union.indices, union.shape, a0, D
+        a0 = np.zeros(nnz, dtype=dtype)
+        a0[slots(mats[0])] = mats[0].data
+        # CSC: column j holds A_j's values at its slots
+        D = sp.csc_array(
+            (
+                np.concatenate([m.data for m in mats[1:]]).astype(dtype),
+                np.concatenate([slots(m) for m in mats[1:]]),
+                np.concatenate([[0], np.cumsum([m.nnz for m in mats[1:]])]),
+            ),
+            shape=(nnz, K),
+        )
+
+        return union.indptr, union.indices, union.shape, a0, D.toarray() if dense else D
 
     def _get_total_A_noprecomp(self, lags: FloatNDArray) -> sp.csc_array | ComplexArray:
         """Return total A without precomputation (better for many constraints)."""
