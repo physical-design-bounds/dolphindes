@@ -5,6 +5,27 @@ while we're pre-1.0, the public API may still change between minor releases.
 
 ## Unreleased
 
+- **New (experimental):** a log-det barrier for the PSD constraint.
+  `OptimizationHyperparameters(psd_barrier="logdet")` minimizes
+  `D(λ) - μ log det A(λ) - μ Σ log λ_i`, the sum over the inequality multipliers,
+  and lowers `μ` each outer iteration on the existing `penalty_ratio` schedule. It
+  replaces both the PSD-boundary penalty vectors and the active set on inequality
+  multipliers; the default, `psd_barrier="penalty"`, keeps both. 
+  It is meant for duals whose optimum lies on a degenerate face of the PSD
+  cone, where `A(λ*)` is singular in many directions at once and the penalty vectors,
+  which handle one direction at a time, stall. 
+- **Fixed:** `Projectors.get_Pdata_column_stack` raised (a failed reshape) for
+  non-diagonal projectors whose individual `P_j` are sparser than `Pstruct`, which
+  stopped GCD on such problems. It padded each `P_j` to the pattern of `Pstruct` by
+  adding a zero-valued copy of `Pstruct`, but sparse addition drops explicit zeros.
+  Each entry is now placed by its position in `Pstruct`.
+- **Faster assembly with many local constraints:** the fixed-pattern assembly of
+  `A(λ)` from 0.2.2 holds the constraint matrices as the columns of an
+  `nnz(A) x #constraints` block, which was always dense and was skipped above 512 MB,
+  falling back to summing the constraint matrices one at a time. The block is now
+  kept sparse when it is under 3% full, or when only the sparse form fits in the
+  512 MB budget. Fuller blocks that fit stay dense as before (GCD constraints, pixel
+  constraints on small regions).
 - **Tighter GCD bounds:** the smallest-eigenvector constraint GCD generates each
   iteration is now normalized as a whole rather than entry-by-entry. Dividing each
   entry by its own modulus flattened every magnitude to 1, keeping only the phase and

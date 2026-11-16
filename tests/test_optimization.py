@@ -220,6 +220,9 @@ def test_line_search_jumps_to_the_wall(wall, expected_checks) -> None:
     opt.wall_step_func = lambda x, d: wall
     x0, d = np.zeros(1), np.ones(1)
     alpha_opt, alpha_feas = opt._line_search(d, x0, 0.0, -d, 100.0)
+    # keep the feasibility phase, up to the first feasible point (backtracking on the
+    # value then checks each point it evaluates)
+    checks = checks[: next(i for i, x in enumerate(checks) if x < 1.0) + 1]
 
     if expected_checks is not None:
         assert checks == expected_checks
@@ -227,6 +230,30 @@ def test_line_search_jumps_to_the_wall(wall, expected_checks) -> None:
     else:
         assert len(checks) > 10
         assert np.isclose(alpha_feas, 100.0 * 0.7 ** (len(checks) - 1))
+
+
+def test_line_search_stops_at_an_infeasible_backtracking_point() -> None:
+    """Backtracking on the value checks each point before evaluating it: next to the
+    PSD wall, roundoff can make a point short of a feasible one infeasible, and the
+    objective (a Cholesky factorization) would fail there. The search then keeps the
+    last step it evaluated."""
+    x_bad = 0.7  # the first point backtracking tries from a step of 1
+
+    def optfunc(x, **kwargs):
+        assert not np.isclose(x[0], x_bad), "objective evaluated at an infeasible point"
+        return float(x[0]), None, None, None  # falls while the search backtracks
+
+    opt = Alt_Newton_GD(
+        optfunc,
+        lambda x: not np.isclose(x[0], x_bad),
+        lambda x: (np.zeros_like(x), None),
+        True,
+        OptimizationHyperparameters(),
+    )
+    alpha_opt, alpha_feas = opt._line_search(
+        np.ones(1), np.zeros(1), 0.0, np.ones(1), 1.0
+    )
+    assert alpha_opt == alpha_feas == 1.0
 
 
 @pytest.mark.parametrize("alternate_above", [np.inf, 3])

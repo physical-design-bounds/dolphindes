@@ -163,3 +163,31 @@ def test_penalized_derivatives_match_finite_differences(qcqp):
     assert np.allclose(
         hess, numerical_hess, rtol=1e-4, atol=1e-6 * np.abs(hess).max()
     )
+
+
+def test_logdet_barrier_derivatives_match_finite_differences(qcqp):
+    """The log-det barrier's gradient and Hessian match differences of its value, with
+    the general constraint as an inequality, so that its -log lags_i term is in."""
+    qcqp.gen_ineq[:] = True
+    k = qcqp.get_number_constraints()
+    lags = np.full(k, 0.01)
+    assert qcqp.is_dual_feasible(lags)
+    _, grad, hess = qcqp._logdet_barrier(lags, get_grad=True, get_hess=True)
+
+    step = 1e-6
+    numerical_grad = np.zeros(k)
+    numerical_hess = np.zeros((k, k))
+    for i in range(k):
+        plus, minus = lags.copy(), lags.copy()
+        plus[i] += step
+        minus[i] -= step
+        numerical_grad[i] = (
+            qcqp._logdet_barrier(plus)[0] - qcqp._logdet_barrier(minus)[0]
+        ) / (2 * step)
+        numerical_hess[:, i] = (
+            qcqp._logdet_barrier(plus, get_grad=True)[1]
+            - qcqp._logdet_barrier(minus, get_grad=True)[1]
+        ) / (2 * step)
+
+    assert np.allclose(grad, numerical_grad, rtol=1e-5)
+    assert np.allclose(hess, numerical_hess, rtol=1e-5)

@@ -27,7 +27,10 @@ class OptimizationHyperparameters:
     max_restart : float
         Maximum number of outer iterations that reduce penalties. Default: np.inf.
     penalty_ratio : float
-        Initial boundary penalty values, as a factor of dualvalue. Default: 1e-2.
+        Initial boundary penalty values, as a factor of dualvalue. With
+        psd_barrier="logdet", the gap mu (n + number of inequality multipliers) left
+        by the barrier at the start, as a factor of the starting dual value.
+        Default: 1e-2.
     penalty_reduction : float
         Factor by which penalty ratio is reduced per outer iteration. Default: 0.1.
     break_iter_period : int
@@ -38,6 +41,16 @@ class OptimizationHyperparameters:
         Number of multipliers above which Newton (Alt_Newton_GD) alternates Newton
         and gradient steps, both normalized with lengths learned from step to step,
         instead of taking every Newton step at its own length.
+    psd_barrier : str
+        How the dual is kept inside A(lags) >= 0 and, for inequality constraints,
+        lags_i >= 0. Two modes, which are not mixed:
+            "penalty": a penalty vector (fake source) at each PSD wall the line
+                search hits, and an active set for lags_i >= 0. Default.
+            "logdet" (experimental): -mu log det A(lags) - mu sum_i log lags_i,
+                which pushes back in every direction at once. For duals whose
+                optimum has many directions at the wall, such as problems with
+                binary structure variables, where the active set would also be
+                slow (it activates at most one bound per step).
     """
 
     opttol: float = 1e-2
@@ -49,6 +62,7 @@ class OptimizationHyperparameters:
     break_iter_period: int = 50
     verbose: int = 0
     newton_alternate_above: float = 100
+    psd_barrier: str = "penalty"
 
 
 class _Optimizer:
@@ -65,8 +79,9 @@ class _Optimizer:
         which may contain zeroes if the method does not need them.
     feasible_func : Callable[[FloatNDArray], bool]
         Function that checks if a solution is feasible.
-    penalty_vector_func : Callable[[FloatNDArray], Tuple[FloatNDArray, Any]]
-        Function that returns penalty vectors.
+    penalty_vector_func : Callable[[FloatNDArray], Tuple[FloatNDArray, Any]] | None
+        Function that returns penalty vectors; None never adds any (e.g. when
+        optfunc includes a barrier).
     is_convex : bool
         Boolean indicating if the optimization problem is convex.
     opt_params : OptimizationHyperparameters
@@ -105,7 +120,7 @@ class _Optimizer:
         self,
         optfunc: Callable[..., Tuple[float, FloatNDArray, FloatNDArray, Any]],
         feasible_func: Callable[[FloatNDArray], bool],
-        penalty_vector_func: Callable[[FloatNDArray], Tuple[FloatNDArray, Any]],
+        penalty_vector_func: Callable[[FloatNDArray], Tuple[FloatNDArray, Any]] | None,
         is_convex: bool,
         opt_params: OptimizationHyperparameters,
         nonneg: NDArray[np.bool_] | None = None,
@@ -385,6 +400,11 @@ class _Optimizer:
         opt_val = np.inf
         grad_direction = dir @ grad
         while True:
+            # Points short of a feasible one are feasible in exact arithmetic, but next
+            # to the PSD wall roundoff can make them infeasible: stop backtracking
+            # there.
+            if not self.feasible_func(x0 + alpha * dir):
+                break
             tmp_value, _, _, _ = self.optfunc(
                 x0 + alpha * dir,
                 get_grad=False,
@@ -603,8 +623,10 @@ class BFGS(_Optimizer):
             # if no backtracking happened, can start with a more aggressive stepsize
             return opt_step_size * 2, False
         else:
-            if feas_step_size < last_step_size and np.isclose(
-                opt_step_size, feas_step_size, atol=0.0
+            if (
+                self.penalty_vector_func is not None
+                and feas_step_size < last_step_size
+                and np.isclose(opt_step_size, feas_step_size, atol=0.0)
             ):
                 # all the backtracking due to feasibility reasons, add penalty
                 if self.verbose >= 2:
@@ -849,8 +871,10 @@ class Alt_Newton_GD(_Optimizer):
             # if no backtracking happened, can start with a more aggressive stepsize
             return opt_step_size * 2
 
-        if feas_step_size < last_step_size and np.isclose(
-            opt_step_size, feas_step_size, atol=0.0
+        if (
+            self.penalty_vector_func is not None
+            and feas_step_size < last_step_size
+            and np.isclose(opt_step_size, feas_step_size, atol=0.0)
         ):
             # all the backtracking due to feasibility reasons, add penalty
             if self.verbose >= 2:

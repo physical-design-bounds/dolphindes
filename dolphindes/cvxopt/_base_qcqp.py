@@ -1,3 +1,4 @@
+import warnings
 from abc import ABC, abstractmethod
 from collections import OrderedDict, namedtuple
 from typing import TYPE_CHECKING, Any, Iterator, Optional, Tuple, cast
@@ -239,12 +240,14 @@ class _SharedProjQCQP(ABC):
 
         # Fixed-pattern representation of A(lags), built lazily by _build_assembly_map.
         # None means sum the A_k elementwise, _built distinguishes that from not
-        # having built it yet
+        # having built it yet. Its D is stored dense when at least _dense_min_density
+        # of it is nonzero and that fits in _max_bytes, else sparse if that fits.
         self._assembly_map: Optional[
-            Tuple[Any, Any, Tuple[int, int], ComplexArray, ComplexArray]
+            Tuple[Any, Any, Tuple[int, int], ComplexArray, ComplexArray | sp.csc_array]
         ] = None
         self._assembly_map_built = False
         self._assembly_map_max_bytes = 512 * 1024**2
+        self._assembly_map_dense_min_density = 0.03
 
         if self.use_precomp:
             self.compute_precomputed_values()
@@ -360,26 +363,36 @@ class _SharedProjQCQP(ABC):
                 lags[i] * self.precomputed_As[i] for i in range(len(lags))
             )
         indptr, indices, shape, a0, D = self._assembly_map
-        data = a0 + D[:, : len(lags)] @ lags
+        # slicing a sparse D copies it, so only slice when lags is short
+        data = a0 + (D if len(lags) == D.shape[1] else D[:, : len(lags)]) @ lags
         return sp.csc_array((data, indices, indptr), shape=shape)
 
     def _build_assembly_map(
         self,
-    ) -> Optional[Tuple[Any, Any, Tuple[int, int], ComplexArray, ComplexArray]]:
+    ) -> Optional[
+        Tuple[Any, Any, Tuple[int, int], ComplexArray, ComplexArray | sp.csc_array]
+    ]:
         """Return a fixed-pattern representation of A(lags), or None if unavailable.
 
         Every A_k is supported inside one lags-independent pattern so A(lags) needs no
         index merging at all. Holding each A_k's entries in their slots in that pattern
-        as the columns of a dense ``(nnz, n_constr)`` block D,
+        as the columns of an ``(nnz, n_constr)`` matrix D,
 
             A(lags).data = a0 + D @ lags
 
-        which is one operation over contiguous memory in place of ``n_constr`` sparse
-        additions that each merge two index structures and allocate.
+        which is one product in place of ``n_constr`` sparse additions that each merge
+        two index structures and allocate.
+
+        Column k of D has nnz(A_k) nonzeros. Many local constraints (pixels, brush
+        stamps) leave D almost empty, so it is kept sparse. A few constraints spread
+        over the whole pattern (e.g. after GCD) fill it, and it is stored dense when
+        at least ``_assembly_map_dense_min_density`` of it is nonzero and the dense
+        array fits in ``_assembly_map_max_bytes``: a dense product that stays in cache
+        beats the sparse one down to a density of a few percent.
 
         Returns None (leaving the elementwise sum in use) when the formulation is
         dense, where the A_k are full n^2 matrices with no pattern to share, or when
-        D would exceed ``_assembly_map_max_bytes``.
+        D would exceed ``_assembly_map_max_bytes`` sparse too.
 
         Returns
         -------
@@ -411,25 +424,38 @@ class _SharedProjQCQP(ABC):
         union = sp.csc_array(union)
         union.sort_indices()
 
-        nnz = union.nnz
-        if nnz * len(mats[1:]) * dtype.itemsize > self._assembly_map_max_bytes:
+        nnz, K = union.nnz, len(mats) - 1
+        nnz_D = sum(m.nnz for m in mats[1:])
+        dense = (
+            nnz_D >= self._assembly_map_dense_min_density * nnz * K
+            and nnz * K * dtype.itemsize <= self._assembly_map_max_bytes
+        )
+        # sparse: a value and an int64 row index per entry
+        if not dense and nnz_D * (dtype.itemsize + 8) > self._assembly_map_max_bytes:
             return None
 
         slot_carrier = union.copy()
         slot_carrier.data = np.arange(1, nnz + 1, dtype=float)
 
-        a0 = np.zeros(nnz, dtype=dtype)
-        D = np.zeros((nnz, len(self.precomputed_As)), dtype=dtype)
-        for j, m in enumerate(mats):
-            slots = sp.csc_array(slot_carrier.multiply(pattern(m)))
-            slots.sort_indices()
-            pos = slots.data.astype(np.int64) - 1
-            if j == 0:
-                a0[pos] = m.data
-            else:
-                D[pos, j - 1] = m.data
+        def slots(m: sp.csc_array) -> NDArray[np.int64]:
+            """Positions of m's entries (in m.data order) in the union pattern."""
+            s = sp.csc_array(slot_carrier.multiply(pattern(m)))
+            s.sort_indices()
+            return cast(NDArray[np.int64], s.data.astype(np.int64) - 1)
 
-        return union.indptr, union.indices, union.shape, a0, D
+        a0 = np.zeros(nnz, dtype=dtype)
+        a0[slots(mats[0])] = mats[0].data
+        # CSC: column j holds A_j's values at its slots
+        D = sp.csc_array(
+            (
+                np.concatenate([m.data for m in mats[1:]]).astype(dtype),
+                np.concatenate([slots(m) for m in mats[1:]]),
+                np.concatenate([[0], np.cumsum([m.nnz for m in mats[1:]])]),
+            ),
+            shape=(nnz, K),
+        )
+
+        return union.indptr, union.indices, union.shape, a0, D.toarray() if dense else D
 
     def _get_total_A_noprecomp(self, lags: FloatNDArray) -> sp.csc_array | ComplexArray:
         """Return total A without precomputation (better for many constraints)."""
@@ -572,6 +598,11 @@ class _SharedProjQCQP(ABC):
         ComplexArray
             Solution vector(s) x = A^{-1} b.
         """
+        pass
+
+    @abstractmethod
+    def _logdet_factor(self) -> float:
+        """Return log det A for the current factorization ``self.Acho``."""
         pass
 
     @abstractmethod
@@ -934,6 +965,94 @@ class _SharedProjQCQP(ABC):
         else:
             return dualval, grad, hess, dual_aux
 
+    def _logdet_barrier(
+        self, lags: FloatNDArray, get_grad: bool = False, get_hess: bool = False
+    ) -> Tuple[float, Optional[FloatNDArray], Optional[FloatNDArray]]:
+        """Return -log det A(lags) - sum_i log lags_i and, if asked, its derivatives.
+
+        The sum runs over the inequality multipliers (gen_ineq), so this is
+        -log det diag(A, lags_ineq), the barrier for A >= 0 and lags_ineq >= 0 together.
+        Its gradient and Hessian are -1/lags_i and 1/lags_i^2 (diagonal).
+
+        For -log det A, the gradient is -tr(A^-1 A_k) and the Hessian is
+        tr(A^-1 A_k A^-1 A_l).
+
+        For a projector constraint, A_k = Sym(A1 P_k A2) with
+        P_k = sum_e p_ke E_(r_e, c_e) over the entries e of Pstruct. Both traces
+        then reduce to entries of
+            Guw = A2 A^-1 A1,   Gww = A2 A^-1 A2^†,   Guu = A1^† A^-1 A1:
+            tr(A^-1 A_k)          = Re sum_e p_ke Guw[c_e, r_e]
+            tr(A^-1 A_k A^-1 A_l) = Re sum_ef p_ke (p_lf T1[e, f]
+                                                   + conj(p_lf) T2[e, f]) / 2,
+            T1[e, f] = Guw[c_e, r_f] Guw[c_f, r_e],
+            T2[e, f] = Gww[c_e, c_f] Guu[r_f, r_e].
+        A general constraint with a quadratic part uses C_j = A^-1 A_j A^-1, since
+        tr(A^-1 A_k A^-1 A_j) = tr(A_k C_j).
+
+        A^-1 and T1, T2 are dense, so this is for n and nnz(Pstruct) up to a few
+        thousand.
+        """
+        # Multipliers [0, P) belong to projector constraints, [P, K) to general
+        # constraints; ineq are the general ones that are inequalities.
+        P, K = self.n_proj_constr, self.get_number_constraints()
+        ineq = P + np.flatnonzero(self.gen_ineq)
+        lam = lags[ineq]
+
+        # Value, from the Cholesky factor of A(lags)
+        self._get_factorization(lags)
+        value = -self._logdet_factor() - float(np.sum(np.log(lam)))
+        if not (get_grad or get_hess):
+            return value, None, None
+
+        # Setup. The sparse A_j of the general constraints are kept in `gen`.
+        Ainv = self._Acho_solve(np.eye(self.A0.shape[0], dtype=complex))
+        A1, A2 = self.A1, self.A2
+        # Pdata[e, k] = p_ke, the value of P_k at the entry (r[e], c[e]) of Pstruct
+        r, c = self.Proj.Pstruct.nonzero()
+        Pdata = sp.csr_array(self.Proj.get_Pdata_column_stack())
+        gen = [sp.coo_array(Aj) for Aj in self.precomputed_As[P:]]
+
+        def re_tr(M: ComplexArray, Ak: sp.coo_array) -> float:
+            """Re tr(M A_k) = Re sum_ab M[b, a] A_k[a, b] for a sparse A_k."""
+            return float(np.real(Ak.data @ M[Ak.col, Ak.row]))
+
+        # Gradient, -tr(A^-1 A_k)
+        Guw = A2 @ Ainv @ A1
+        grad = np.zeros(K)
+        grad[:P] = -np.real(Pdata.T @ Guw[c, r])
+        grad[P:] = [-re_tr(Ainv, Aj) for Aj in gen]
+        grad[ineq] -= 1 / lam
+        if not get_hess:
+            return value, grad, None
+
+        # Hessian, tr(A^-1 A_k A^-1 A_l)
+        hess = np.zeros((K, K))
+
+        # Projector-projector block: T1 and T2 have one row and one column per
+        # entry of Pstruct, so they are built a block of rows at a time.
+        Gww = A2 @ Ainv @ A2.conj().T
+        Guu = A1.conj().T @ Ainv @ A1
+        block = max(1, 2**22 // len(r))  # rows per block, ~4M entries of T1, T2
+        Pdata_conj = Pdata.conj()
+        for s in range(0, len(r), block):
+            b = slice(s, s + block)
+            T1 = Guw[c[b, None], r[None, :]] * Guw[c[None, :], r[b, None]]
+            T2 = Gww[c[b, None], c[None, :]] * Guu[r[None, :], r[b, None]]
+            Tp = T1 @ Pdata + T2 @ Pdata_conj
+            hess[:P, :P] += 0.5 * np.real(Pdata[b].T @ Tp)
+
+        # Rows and columns of general constraints j: tr(A_k C_j), C_j = A^-1 A_j A^-1
+        for j, Aj in enumerate(gen):
+            if Aj.nnz == 0:  # A does not depend on this multiplier
+                continue
+            C = Ainv @ (Aj @ Ainv)
+            # with projector constraints k: as the gradient, with C_j in place of A^-1
+            hess[:P, P + j] = hess[P + j, :P] = np.real(Pdata.T @ (A2 @ C @ A1)[c, r])
+            # with general constraints l: directly from the sparse A_l
+            hess[P:, P + j] = [re_tr(C, Al) for Al in gen]
+        hess[ineq, ineq] += 1 / lam**2
+        return value, grad, hess
+
     def solve_current_dual_problem(
         self,
         method: str,
@@ -958,7 +1077,9 @@ class _SharedProjQCQP(ABC):
         current_dual : float
             Smallest dual value found, without the PSD-boundary penalties.
         current_lags : FloatNDArray
-            Lagrange multipliers at which current_dual was found.
+            Lagrange multipliers at which current_dual was found. With
+            psd_barrier="logdet" usually next to the PSD wall, a poor warm start:
+            the optimizer's last iterate, ``_stop_lags``, is on the central path.
         current_grad : FloatNDArray
             Gradient of the dual at current_lags, without penalties.
         current_hess : FloatNDArray | None
@@ -987,6 +1108,33 @@ class _SharedProjQCQP(ABC):
         best_dual = np.inf
         best_lags = init_lags.copy()
 
+        if opt_params.psd_barrier not in ("penalty", "logdet"):
+            raise ValueError(f"Unknown psd_barrier '{opt_params.psd_barrier}'.")
+        use_barrier = opt_params.psd_barrier == "logdet"
+        nonneg = self._nonneg_mask()
+        if use_barrier:
+            warnings.warn(
+                'psd_barrier="logdet" is experimental.', UserWarning, stacklevel=2
+            )
+            # mu = barrier_scale * penalty_ratio, so that the gap the barrier leaves,
+            # mu (n + number of inequality multipliers), starts at
+            # penalty_ratio * |D(init_lags)|
+            degree = self.A0.shape[0] + np.count_nonzero(self.gen_ineq)
+            barrier_scale = abs(self.get_dual(init_lags)[0]) / degree
+            if nonneg is not None:
+                # The barrier needs the inequality multipliers > 0: start them at mu
+                # or more (on the central path, lags_i times the slack of
+                # constraint i is mu), or less if that leaves A(lags) indefinite.
+                lift = barrier_scale * opt_params.penalty_ratio
+                start = init_lags.copy()
+                start[nonneg] = np.maximum(init_lags[nonneg], lift)
+                while not self.is_dual_feasible(start):
+                    lift *= 0.1
+                    if lift < 1e-12 * barrier_scale:
+                        raise ValueError("init_lags is not dual feasible.")
+                    start[nonneg] = np.maximum(init_lags[nonneg], lift)
+                init_lags = start
+
         def optfunc(
             lags: FloatNDArray,
             get_grad: bool = False,
@@ -1000,20 +1148,36 @@ class _SharedProjQCQP(ABC):
             if out[3].dualval_real < best_dual:
                 best_dual = out[3].dualval_real
                 best_lags = np.array(lags, dtype=float)
-            return out
+            if not use_barrier:
+                return out
+            # The optimizer reduces penalty_ratio once per outer iteration.
+            mu = barrier_scale * optimizer.penalty_ratio
+            val, grad, hess = self._logdet_barrier(lags, get_grad or get_hess, get_hess)
+            return (
+                out[0] + mu * val,
+                None if out[1] is None else out[1] + mu * grad,
+                None if out[2] is None else out[2] + mu * hess,
+                out[3],
+            )
 
-        feasibility_func = self.is_dual_feasible
-        penalty_vector_func = self._get_PSD_penalty
+        def feasibility_func(lags: FloatNDArray) -> bool:
+            # With the barrier, lags > 0 on the inequality multipliers is part of
+            # feasibility; otherwise the optimizer keeps them >= 0 (active set).
+            if use_barrier and nonneg is not None and np.any(lags[nonneg] <= 0.0):
+                return False
+            return self.is_dual_feasible(lags)
+
+        penalty_vector_func = None if use_barrier else self._get_PSD_penalty
 
         args = (optfunc, feasibility_func, penalty_vector_func, is_convex, opt_params)
-        nonneg = self._nonneg_mask()
+        bounds = None if use_barrier else nonneg
 
         optimizer: _Optimizer
         if method == "newton":
-            optimizer = Alt_Newton_GD(*args, nonneg=nonneg)
+            optimizer = Alt_Newton_GD(*args, nonneg=bounds)
             optimizer.wall_step_func = self._wall_step
         elif method == "bfgs":
-            optimizer = BFGS(*args, nonneg=nonneg)
+            optimizer = BFGS(*args, nonneg=bounds)
         else:
             raise ValueError(
                 f"Unknown method '{method}' for solving the dual problem. "
@@ -1022,7 +1186,8 @@ class _SharedProjQCQP(ABC):
 
         self._stop_lags = optimizer.run(init_lags)[0].copy()
         # Report everything at the multipliers of the smallest dual (cached
-        # calculation), so later solves can warm-start from them.
+        # calculation). With the barrier these are usually a line-search point next
+        # to the PSD wall: continue from self._stop_lags instead, as run_gcd does.
         best_lags = self._clip_to_bounds(best_lags)
         dual, grad, hess, _ = self.get_dual(
             best_lags, get_grad=True, get_hess=method == "newton"

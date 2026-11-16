@@ -197,15 +197,18 @@ class Projectors:
         if self._is_diagonal:
             return self.Pdiags[self.Pstruct.indices, :]
 
-        P_stackV_fullsize_template = sp.vstack(
-            [self.Pstruct] * self._k, dtype=complex, format="csr"
-        )
-        P_stackV_fullsize_template.data[:] = 0.0
-        # template needed because individual P_j may be sparser than Pstruct
-        Pdata_stack = (P_stackV_fullsize_template + self.P_stackV).data
-        return cast(
-            ComplexArray, Pdata_stack.reshape((self.Pstruct.size, self._k), order="F")
-        )
+        # Build the P_J entries matrix
+        n = self._n
+        rows, cols = self.Pstruct.nonzero()
+        struct_keys = rows.astype(np.int64) * n + cols
+        order = np.argsort(struct_keys)
+        coo = sp.coo_array(self.P_stackV)
+        coo.sum_duplicates()
+        keys = (coo.row % n).astype(np.int64) * n + coo.col
+        pos = order[np.searchsorted(struct_keys[order], keys)]
+        Pdata = np.zeros((self.Pstruct.size, self._k), dtype=complex)
+        Pdata[pos, coo.row // n] = coo.data
+        return Pdata
 
     def set_Pdata_column_stack(self, Pdata: SparseDense) -> None:
         """Set projectors from column-stacked sparse entries.
