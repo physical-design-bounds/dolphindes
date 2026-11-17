@@ -986,11 +986,19 @@ class _SharedProjQCQP(ABC):
                                                    + conj(p_lf) T2[e, f]) / 2,
             T1[e, f] = Guw[c_e, r_f] Guw[c_f, r_e],
             T2[e, f] = Gww[c_e, c_f] Guu[r_f, r_e].
-        A general constraint with a quadratic part uses C_j = A^-1 A_j A^-1, since
-        tr(A^-1 A_k A^-1 A_j) = tr(A_k C_j).
 
-        A^-1 and T1, T2 are dense, so this is for n and nnz(Pstruct) up to a few
-        thousand.
+        A general constraint has A_j = A2^† S_j A2 with S_j = Sym(B_j), so its traces
+        reduce to entries of Gww and Guw too. With the entries g of all S_j stacked,
+        S_j[gr_g, gc_g] = W[g, j]:
+            tr(A^-1 A_j)          = Re sum_g W[g, j] Gww[gc_g, gr_g]
+            tr(A^-1 A_j A^-1 A_l) = Re sum_gh W[g, j] W[h, l] T3[g, h],
+            T3[g, h] = Gww[gc_g, gr_h] Gww[gc_h, gr_g],
+        and with a projector constraint k,
+            tr(A^-1 A_k A^-1 A_j) = Re sum_eg p_ke W[g, j] U[e, g],
+            U[e, g] = Gww[c_e, gr_g] Guw[gc_g, r_e].
+
+        A^-1 and T1, T2, T3, U are dense, so this is for n, nnz(Pstruct) and the
+        number of entries of all B_j up to a few thousand.
         """
         # Multipliers [0, P) belong to projector constraints, [P, K) to general
         # constraints; ineq are the general ones that are inequalities.
@@ -1004,23 +1012,34 @@ class _SharedProjQCQP(ABC):
         if not (get_grad or get_hess):
             return value, None, None
 
-        # Setup. The sparse A_j of the general constraints are kept in `gen`.
+        # Setup
         Ainv = self._Acho_solve(np.eye(self.A0.shape[0], dtype=complex))
         A1, A2 = self.A1, self.A2
         # Pdata[e, k] = p_ke, the value of P_k at the entry (r[e], c[e]) of Pstruct
         r, c = self.Proj.Pstruct.nonzero()
         Pdata = sp.csr_array(self.Proj.get_Pdata_column_stack())
-        gen = [sp.coo_array(Aj) for Aj in self.precomputed_As[P:]]
-
-        def re_tr(M: ComplexArray, Ak: sp.coo_array) -> float:
-            """Re tr(M A_k) = Re sum_ab M[b, a] A_k[a, b] for a sparse A_k."""
-            return float(np.real(Ak.data @ M[Ak.col, Ak.row]))
+        # W[g, j] = S_j[gr[g], gc[g]], over the entries g of all S_j = Sym(B_j): those
+        # of B_j / 2 and of B_j^† / 2 (an entry in both is listed twice, which adds up)
+        gen = [sp.coo_array(Bj) for Bj in self.B_j]
+        rows = np.concatenate([np.zeros(0, int)] + [Bj.row for Bj in gen])
+        cols = np.concatenate([np.zeros(0, int)] + [Bj.col for Bj in gen])
+        vals = np.concatenate([np.zeros(0)] + [Bj.data for Bj in gen]) / 2
+        owner = np.repeat(np.arange(K - P), [Bj.nnz for Bj in gen])
+        gr, gc = np.concatenate([rows, cols]), np.concatenate([cols, rows])
+        W = sp.csr_array(
+            (
+                np.concatenate([vals, vals.conj()]),
+                (np.arange(len(gr)), np.tile(owner, 2)),
+            ),
+            shape=(len(gr), K - P),
+        )
 
         # Gradient, -tr(A^-1 A_k)
         Guw = A2 @ Ainv @ A1
+        Gww = A2 @ Ainv @ A2.conj().T
         grad = np.zeros(K)
         grad[:P] = -np.real(Pdata.T @ Guw[c, r])
-        grad[P:] = [-re_tr(Ainv, Aj) for Aj in gen]
+        grad[P:] = -np.real(W.T @ Gww[gc, gr])
         grad[ineq] -= 1 / lam
         if not get_hess:
             return value, grad, None
@@ -1030,7 +1049,6 @@ class _SharedProjQCQP(ABC):
 
         # Projector-projector block: T1 and T2 have one row and one column per
         # entry of Pstruct, so they are built a block of rows at a time.
-        Gww = A2 @ Ainv @ A2.conj().T
         Guu = A1.conj().T @ Ainv @ A1
         block = max(1, 2**22 // len(r))  # rows per block, ~4M entries of T1, T2
         Pdata_conj = Pdata.conj()
@@ -1041,15 +1059,19 @@ class _SharedProjQCQP(ABC):
             Tp = T1 @ Pdata + T2 @ Pdata_conj
             hess[:P, :P] += 0.5 * np.real(Pdata[b].T @ Tp)
 
-        # Rows and columns of general constraints j: tr(A_k C_j), C_j = A^-1 A_j A^-1
-        for j, Aj in enumerate(gen):
-            if Aj.nnz == 0:  # A does not depend on this multiplier
-                continue
-            C = Ainv @ (Aj @ Ainv)
-            # with projector constraints k: as the gradient, with C_j in place of A^-1
-            hess[:P, P + j] = hess[P + j, :P] = np.real(Pdata.T @ (A2 @ C @ A1)[c, r])
-            # with general constraints l: directly from the sparse A_l
-            hess[P:, P + j] = [re_tr(C, Al) for Al in gen]
+        # Rows and columns of general constraints, from the stacked entries of the
+        # S_j: U and T3 have one column per entry, so they are built a block of rows
+        # at a time.
+        block = max(1, 2**22 // max(len(gr), 1))
+        for s in range(0, len(r), block):
+            b = slice(s, s + block)
+            U = Gww[c[b, None], gr[None, :]] * Guw[gc[None, :], r[b, None]]
+            hess[:P, P:] += np.real(Pdata[b].T @ (U @ W))
+        hess[P:, :P] = hess[:P, P:].T
+        for s in range(0, len(gr), block):
+            b = slice(s, s + block)
+            T3 = Gww[gc[b, None], gr[None, :]] * Gww[gc[None, :], gr[b, None]]
+            hess[P:, P:] += np.real(W[b].T @ (T3 @ W))
         hess[ineq, ineq] += 1 / lam**2
         return value, grad, hess
 
